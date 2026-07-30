@@ -1,0 +1,9 @@
+# The two packages are independent nested git repos (own history, own
+# remotes) — hex-ob tracks only sandbox-level docs/glue. See README.md.
+/hextools/
+/hex-profile-collection/
+
+# local env/tooling
+.pixi/
+.venv/
+__pycache__/
