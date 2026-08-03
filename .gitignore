@@ -3,7 +3,13 @@
 /hextools/
 /hex-profile-collection/
 
+AGENTS.md
+REQUIRES.md
+ref
+
+
 # local env/tooling
 .pixi/
 .venv/
 __pycache__/
+.idea
