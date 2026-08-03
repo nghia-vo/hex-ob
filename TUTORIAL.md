@@ -101,76 +101,104 @@ yield from bps.mv(sample_x.high_limit_travel,  20.0)
 ## 2. Device — multiple motors (Monochromator)
 
 A **Device** groups related motors under one name so you can treat them as a unit.
+Better still, a device with a natural physics coordinate can be made **movable in that
+coordinate** — the energy→motor calculation lives *inside* the device, so you move the
+mono in keV and never think about crystal motors. (This pattern follows the CDI
+beamline's attenuator in `cditools`, which is movable in attenuation state.)
 
-### Define the device
+### Define the device — movable in ENERGY
 
 ```python
-from ophyd_async.core import Device
-from ophyd_async.epics.motor import Motor
-from ophyd_async.core import init_devices
+import asyncio
+import math
 
-class Monochromator(Device):
+from ophyd_async.core import AsyncMovable, AsyncStatus, StandardReadable, init_devices
+from ophyd_async.epics.motor import Motor
+
+
+class Monochromator(StandardReadable, AsyncMovable[float]):
     """
-    HEX double-crystal monochromator.
-    Two crystals, each with a Z (translation) and a pitch motor.
+    HEX double-crystal monochromator, movable in photon ENERGY (keV).
+
+    Two crystals, each with a Z (translation) and a pitch motor — but you
+    never move those directly: ``bps.mv(mono, 12.0)`` computes and moves
+    everything.
     """
-    crystal1_z     = Motor("XF:27IDA-OP:1{Mono:DCLM-Ax:C1Y}Mtr",  name="")
-    crystal1_pitch = Motor("XF:27IDA-OP:1{Mono:DCLM-Ax:C1P}Mtr",  name="")
-    crystal2_z     = Motor("XF:27IDA-OP:1{Mono:DCLM-Ax:Z2}Mtr",   name="")
-    crystal2_pitch = Motor("XF:27IDA-OP:1{Mono:DCLM-Ax:C2P}Mtr",  name="")
+
+    def __init__(self, name: str = ""):
+        self.crystal1_z     = Motor("XF:27IDA-OP:1{Mono:DCLM-Ax:C1Y}Mtr")
+        self.crystal1_pitch = Motor("XF:27IDA-OP:1{Mono:DCLM-Ax:C1P}Mtr")
+        self.crystal2_z     = Motor("XF:27IDA-OP:1{Mono:DCLM-Ax:Z2}Mtr")
+        self.crystal2_pitch = Motor("XF:27IDA-OP:1{Mono:DCLM-Ax:C2P}Mtr")
+        super().__init__(name=name)
+
+    @staticmethod
+    def _energy_to_positions(energy_keV: float) -> dict:
+        """
+        Convert photon energy (keV) to monochromator motor positions.
+        Replace this with the real HEX calculation.
+        """
+        d_spacing = 3.1355e-10      # Si(111) d-spacing in metres
+        hc = 1.23984193e-9          # h*c in keV·m
+        theta = math.asin(hc / (2 * d_spacing * energy_keV))
+        theta_deg = math.degrees(theta)
+        z_offset = 20.0 * math.cos(theta)   # crystal gap in mm (example)
+        return {
+            "crystal1_pitch": theta_deg,
+            "crystal2_pitch": theta_deg,
+            "crystal2_z":     z_offset,
+        }
+
+    @AsyncStatus.wrap
+    async def set(self, value: float):
+        """Move the monochromator to *value* keV (all motors simultaneously)."""
+        positions = self._energy_to_positions(value)
+        await asyncio.gather(
+            self.crystal1_pitch.set(positions["crystal1_pitch"]),
+            self.crystal2_pitch.set(positions["crystal2_pitch"]),
+            self.crystal2_z.set(positions["crystal2_z"]),
+        )
+
 
 with init_devices():
     mono = Monochromator(name="mono")
 ```
 
-### Coordinate motion — change energy
+> Motors are created in ``__init__`` (not at class level) so every
+> ``Monochromator(...)`` instance gets its own motor objects, and
+> ``super().__init__(name=...)`` names all the children automatically.
 
-The plan below shows the pattern:
-**given energy → calculate motor positions → move all motors simultaneously**.
+### Change energy — the device speaks keV
 
 ```python
 import bluesky.plan_stubs as bps
 
-def energy_to_mono_positions(energy_keV: float) -> dict:
-    """
-    Convert photon energy (keV) to monochromator motor positions.
-    Replace this function with the real HEX calculation.
-    """
-    import math
-    d_spacing = 3.1355e-10      # Si(111) d-spacing in metres
-    hc = 1.23984193e-9          # h*c in keV·m
-    theta = math.asin(hc / (2 * d_spacing * energy_keV))
-    theta_deg = math.degrees(theta)
-    z_offset = 20.0 * math.cos(theta)   # crystal gap in mm (example)
-    return {
-        "crystal1_pitch": theta_deg,
-        "crystal2_pitch": theta_deg,
-        "crystal2_z":     z_offset,
-    }
+# Move to 12 keV — reads like physics, no motor names anywhere
+RE(bps.mv(mono, 12.0))
 
-
-def set_energy(energy_keV: float):
-    """Move the monochromator to the given photon energy."""
-    positions = energy_to_mono_positions(energy_keV)
-
-    print(f"Setting energy to {energy_keV} keV")
-    print(f"  crystal1_pitch -> {positions['crystal1_pitch']:.4f} deg")
-    print(f"  crystal2_pitch -> {positions['crystal2_pitch']:.4f} deg")
-    print(f"  crystal2_z     -> {positions['crystal2_z']:.4f} mm")
-
-    # Move all three motors simultaneously, wait for all to complete
-    yield from bps.mv(
-        mono.crystal1_pitch, positions["crystal1_pitch"],
-        mono.crystal2_pitch, positions["crystal2_pitch"],
-        mono.crystal2_z,     positions["crystal2_z"],
-    )
-    print("Done — energy set.")
+# Inside a plan:
+yield from bps.mv(mono, 12.0)
 ```
 
-Usage:
+Because the mono is a *movable*, **every standard Bluesky plan can scan energy
+directly** — no special energy-loop code needed:
+
 ```python
-RE(set_energy(12.0))    # set energy to 12 keV
+import bluesky.plans as bp
+
+# 5-point energy scan, one image per energy
+RE(bp.scan([kinetix1], mono, 10.0, 12.0, 5))
+
+# Energy x translation becomes an ordinary 2D grid scan (see section 7)
+RE(bp.grid_scan([kinetix1], mono, 10.0, 12.0, 3, sample_x, -2.0, 2.0, 5))
 ```
+
+> **Why fold the calculation into the device?** (Jakub's suggestion, 2026-08-03)
+> It is more intuitive — the device speaks the scientist's coordinate; the
+> energy math is unit-testable on the device with mock signals; and plan code
+> never reaches into device internals. If you also want a readable "current
+> energy", add a derived signal that inverts the calculation from the pitch
+> readback.
 
 ---
 
@@ -418,8 +446,13 @@ RE(scan_1d_multi(
 **Scenario:** for each energy step, scan `sample_x` and take one image per position.
 This is an outer (energy) × inner (x) nested scan.
 
+> Since the mono is movable in keV (section 2), an evenly-spaced energy grid is just
+> `bp.grid_scan([detector], mono, e_start, e_stop, e_num, motor_x, x_start, x_stop, x_num)`.
+> The explicit loop below is for when the energy list is irregular.
+
 ```python
 import bluesky.plans as bp
+import bluesky.plan_stubs as bps
 
 def scan_2d_energy_x(detector, motor_x, x_start, x_stop, x_num,
                      energy_list_keV, exposure_time, output_dir, md=None):
@@ -442,7 +475,7 @@ def scan_2d_energy_x(detector, motor_x, x_start, x_stop, x_num,
 
     for energy in energy_list_keV:
         print(f"\n--- Energy: {energy} keV ---")
-        yield from set_energy(energy)          # move monochromator
+        yield from bps.mv(mono, energy)        # mono is movable in keV (section 2)
         yield from bp.scan([detector], motor_x, x_start, x_stop, x_num, md=_md)
 ```
 
@@ -515,7 +548,7 @@ def scan_energy_list(detector, motor, start, stop, num_points,
     """
     for energy in energy_list_keV:
         print(f"\n=== Energy: {energy} keV ===")
-        yield from set_energy(energy)
+        yield from bps.mv(mono, energy)        # mono is movable in keV (section 2)
         scan_dir = output_dir + f"/energy_{energy:.2f}keV"
         yield from scan_1d_single(detector, motor, start, stop, num_points,
                                    exposure_time, scan_dir,
