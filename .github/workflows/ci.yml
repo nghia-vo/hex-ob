@@ -1,0 +1,19 @@
+# Mock-tier CI: structural checks against ophyd-async mock signal backends.
+# Zero EPICS, zero containers — catches API/import/signature regressions on
+# every PR (e.g. code written against an ophyd-async version that isn't the
+# pinned one). Behavioral verification stays with the simulated-beamline
+# tests (tests/alignment_scan_sim_test.py), run outside CI for now.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  mock-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: prefix-dev/setup-pixi@8ca4608ef7f4daeb54f5205b20d0b7cb42f11143  # v0.8.14
+      - run: pixi run test-mock

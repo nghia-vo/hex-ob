@@ -12,7 +12,9 @@ The functional run (frames actually captured, HDF file written, event
 streams) happens against the simulated HEX beamline —
 see tests/alignment_scan_sim_test.py.
 
-Run from the hex-ob root:
+Run from the hex-ob root (same path CI uses):
+    pixi run test-mock
+Or, from the profile env:
     cd hex-profile-collection && \
     PYTHONPATH=.. pixi run -e terminal python ../tests/alignment_scan_mock_test.py
 """
@@ -25,9 +27,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from ophyd_async.core import TriggerInfo, init_devices
 
-# set_mock_value is re-exported by ophyd_async.testing, but that package
-# imports pytest at import time (not in this env) — use the real home.
-from ophyd_async.core._mock_signal_utils import set_mock_value
+try:
+    from ophyd_async.testing import set_mock_value
+except ImportError:
+    # ophyd_async.testing imports pytest at import time; the profile pixi env
+    # has no pytest, so fall back to the symbol's real home there.
+    from ophyd_async.core._mock_signal_utils import set_mock_value
 from ophyd_async.epics.adcore import ADImageMode
 from ophyd_async.epics.adkinetix import KinetixTriggerMode
 
