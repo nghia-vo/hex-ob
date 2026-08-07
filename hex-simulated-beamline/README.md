@@ -1,15 +1,17 @@
 # Simulated HEX (27-ID) beamline
 
 Hardware-free dev/test stack for HEX ophyd-async devices + Bluesky plans, and the acceptance
-oracle for the **HXM-1288** hextools tomography port. **Interim home** (see
-[`../README.md`](../README.md), I-015); governed by [`../../DECISIONS.md`](../../DECISIONS.md)
-**D-0013/D-0014** (device-first cadence; minimal sim per increment, pyepics scripts = the
-executable oracle).
+oracle for the **HXM-1288** hextools tomography port. **Canonical home: this repo**
+(`hex-ob/hex-simulated-beamline/`, moved from `hxm_program/simulated_beamlines/HEX`
+2026-08-07) — co-located with the code it validates (see [`../README.md`](../README.md)).
+Governed by [`hxm_program/DECISIONS.md`](https://github.com/NSLS2/hxm_program/blob/main/DECISIONS.md)
+**D-0013/D-0014/D-0015** (device-first cadence; minimal sim per increment, pyepics scripts =
+the executable oracle; the move here).
 
 **This file is the stable front door** — what the sim is and how to run it.
 **History and current increment live in [`PROGRESS.md`](PROGRESS.md)** (the running log);
-the guided tutorial lives in
-[`../../planning/tasks/hex/HXM-1288.tutorial-tomography.md`](../../planning/tasks/hex/HXM-1288.tutorial-tomography.md).
+planning/task tracking stays in
+[`hxm_program/planning/tasks/hex/`](https://github.com/NSLS2/hxm_program/tree/main/planning/tasks/hex).
 
 **Status (2026-08-03):** the "before" leg is operational — `tomo_flyscan.py` (pyepics) runs
 **verbatim** against the sim: 361 real camera frames, PandA `Angle` dataset in degrees, full
@@ -44,7 +46,7 @@ equivalence gate.
 
 | Tier | Serves | Gets you | Doesn't |
 |---|---|---|---|
-| Frame (real IOC) | Kinetix **Det:1** :5085 | real frames, HDF files, plugin chain | Kinetix-specific PVs (typed connect refuses it — by design) |
+| Frame (real IOC) | Kinetix **Det:1** :5085 | real frames, HDF files, plugin chain; typed connect since the personality overlay (PROGRESS §11) | Kinetix-specific *behavior* (readout-port semantics are cosmetic) |
 | Device-connect (typed sim) | Kinetix **Det:3** in :5064 | exact typed PV set, clean ophyd-async connect | frames (a `count()` fails loud on `NumCaptured`) |
 | Blackhole | every incidental PV | plausibly-typed fabrication, writable | device-specific behavior |
 | Engine (PandA) | :5095/PVA + control | real block logic: PCOMP fires, PCAP captures | FPGA-only blocks (`sfp_panda_sync` dropped) |
@@ -75,7 +77,7 @@ Two different mechanisms, and knowing which is which is the key to trusting the 
 ## Quickstart
 
 ```bash
-cd simulated_beamlines/HEX
+cd hex-ob/hex-simulated-beamline
 ./scripts/up_all.sh          # ONE command: services, PandA, Kinetix, motor, bridge,
                              # sim_ioc, design + IOC inits, shutter seeds
 ```
@@ -92,7 +94,8 @@ pixi run -e terminal ipython --profile-dir=.        # → all startup/*.py → p
 
 Boot completion = the `pass-000000 [1]:` prompt (the simulated data session, right where a
 real proposal number would sit). Expect: `panda1` connects over PVA, `kinetix3` connects
-typed, `kinetix1` reports unavailable (frame tier ≠ Kinetix personality — see the table).
+typed, and since the Kinetix personality landed (PROGRESS §11, 2026-08-03) `kinetix1`
+connects typed against the real frame tier too.
 
 **Smoke tests** (~90 s, all should PASS; run after any container recreate):
 

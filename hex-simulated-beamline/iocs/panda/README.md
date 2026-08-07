@@ -33,7 +33,7 @@ restart-loop.
 ## Run
 
 ```bash
-cd simulated_beamlines/HEX
+cd hex-ob/hex-simulated-beamline
 # build the sim image (first time only; ~1 min)
 docker build -f iocs/panda/Dockerfile.simserver -t hexsim-panda-sim:local iocs/panda
 # start alongside the services stack

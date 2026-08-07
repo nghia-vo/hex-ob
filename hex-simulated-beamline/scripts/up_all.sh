@@ -84,7 +84,7 @@ EPICS_CA_ADDR_LIST=127.0.0.1:5085 "$PY" "$root/iocs/kinetix/init_kinetix.py" >/d
 say "  design + inits OK"
 
 # ---- 5. motor->INENC bridge ---------------------------------------------------
-if ! pgrep -f "motor_encoder_bridge.py" | grep -qv "^$$\$"; then
+if ! pgrep -f "motor_encoder_bridge.py" >/dev/null; then
     say "starting bridge..."
     EPICS_CA_AUTO_ADDR_LIST=NO EPICS_CA_ADDR_LIST=127.0.0.1:5075 \
         nohup "$PY" -u "$root/iocs/panda/motor_encoder_bridge.py" \

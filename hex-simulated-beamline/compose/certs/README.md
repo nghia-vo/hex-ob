@@ -12,7 +12,7 @@ certificates for the local simulated HEX beamline only**. They are:
 
   ```bash
   openssl x509 -in redis.crt -noout -subject
-  # subject=O=NSLS-II HEX beamline SIMULATION (hxm_program),
+  # subject=O=NSLS-II HEX beamline SIMULATION (hex-ob),
   #         OU=SIMULATED - NOT A REAL KEY - self-signed throwaway,
   #         CN=hexsim-redis.simulated
   ```

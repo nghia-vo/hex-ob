@@ -17,3 +17,7 @@ __pycache__/
 hex-simulated-beamline/.toolenv/
 hex-simulated-beamline/.reflow2/
 hex-simulated-beamline/**/__pycache__/
+
+# generated TLS material for the sim's Redis (scripts/up.sh recreates on demand)
+hex-simulated-beamline/compose/certs/*.crt
+hex-simulated-beamline/compose/certs/*.key

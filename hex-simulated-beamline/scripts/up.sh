@@ -14,9 +14,14 @@ if [ ! -f "$certdir/redis.crt" ]; then
     # Subject clearly marks this as a throwaway SIMULATED cert, not a real key.
     openssl req -x509 -newkey rsa:2048 -sha256 -days 825 -nodes \
         -keyout "$certdir/redis.key" -out "$certdir/redis.crt" \
-        -subj "/O=NSLS-II HEX beamline SIMULATION (hxm_program)/OU=SIMULATED - NOT A REAL KEY - self-signed throwaway/CN=hexsim-redis.simulated" \
+        -subj "/O=NSLS-II HEX beamline SIMULATION (hex-ob)/OU=SIMULATED - NOT A REAL KEY - self-signed throwaway/CN=hexsim-redis.simulated" \
         -addext "subjectAltName=DNS:xf27id1-hex-redis1.nsls2.bnl.gov,IP:127.0.0.1" \
         >/dev/null 2>&1
+    # The key is deliberately 0644, not 0600: it is mounted read-only into the
+    # redis container, whose server drops to its internal `redis` user (uid 999)
+    # — a host-owned 0600 key is unreadable there (verified: TLS setup fails).
+    # Acceptable ONLY because this is a throwaway self-signed SIMULATION key
+    # (see the subject), bound to loopback, and never committed (git-ignored).
     chmod 644 "$certdir/redis.key" "$certdir/redis.crt"
 fi
 

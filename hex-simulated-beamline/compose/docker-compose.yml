@@ -1,7 +1,7 @@
 # Simulated HEX beamline — fake services layer (Phase 1)
 #
 # Brings up the off-beamline service dependencies a HEX bluesky session needs:
-#   Redis  (RE metadata store)   -> 127.0.0.1:6379
+#   Redis  (RE metadata store)   -> 127.0.0.1:6380 (TLS; plaintext 6379 disabled)
 #   MongoDB (databroker backend) -> 127.0.0.1:27017
 #   Kafka  (bluesky documents)   -> 127.0.0.1:9092
 #   Tiled  (catalog / writer)    -> 127.0.0.1:8000
