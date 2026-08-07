@@ -37,12 +37,17 @@ from ophyd_async.core import (
     set_and_wait_for_other_value,
     wait_for_value,
 )
+from typing import Annotated as A
+
+from ophyd_async.core import SignalRW
 from ophyd_async.epics.adcore import (
     ADHDFDataLogic,
     ADImageMode,
     ADWriterFactory,
     NDFileHDF5IO,
+    NDPluginBaseIO,
 )
+from ophyd_async.epics.core import PvSuffix
 from ophyd_async.epics.adkinetix import KinetixDetector, KinetixTriggerMode
 from ophyd_async.epics.core import stop_busy_record
 
@@ -99,6 +104,24 @@ def set_output_dir(detector, output_dir, filename: str = "proj") -> Path:
         )
     path_provider.set(output_path, filename)
     return output_path
+
+
+class HEXProcPluginIO(NDPluginBaseIO):
+    """NDPluginProcess with the recursive-filter (frame averaging) fields.
+
+    Mirrors the PVs the legacy scripts drove on ``Proc1:`` for the
+    frame-averaged variants (NDPluginProcess.template).
+    """
+
+    # Enum-backed fields are typed as their choice strings (Disable/Enable,
+    # No/Yes, RecursiveAve/..., Every array/Array N only) — verified against
+    # the live NDPluginProcess template; FilterType has no _RBV.
+    enable_filter: A[SignalRW[str], PvSuffix.rbv("EnableFilter")]
+    filter_type: A[SignalRW[str], PvSuffix("FilterType")]
+    num_filter: A[SignalRW[int], PvSuffix.rbv("NumFilter")]
+    reset_filter: A[SignalRW[str], PvSuffix("ResetFilter")]
+    auto_reset_filter: A[SignalRW[str], PvSuffix.rbv("AutoResetFilter")]
+    filter_callbacks: A[SignalRW[str], PvSuffix.rbv("FilterCallbacks")]
 
 
 class HEXADHDFDataLogic(ADHDFDataLogic):
@@ -182,8 +205,9 @@ def make_kinetix(
     if path_provider is None:
         path_provider = SettablePathProvider()
 
+    prefix = f"XF:27ID1-BI{{Kinetix-Det:{detector_id}}}"
     detector = HEXKinetixDetector(
-        f"XF:27ID1-BI{{Kinetix-Det:{detector_id}}}",
+        prefix,
         ADWriterFactory(
             writer_cls=NDFileHDF5IO,
             writer_suffix="HDF1:",
@@ -199,6 +223,7 @@ def make_kinetix(
                 datakey_suffix="",
             ),
         ),
+        plugins={"proc": HEXProcPluginIO(prefix + "Proc1:")},
         name=f"kinetix{detector_id}",
     )
     # Not an ophyd-async child device — just a handle so plans can retarget

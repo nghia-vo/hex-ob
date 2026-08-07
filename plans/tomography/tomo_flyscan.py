@@ -73,6 +73,7 @@ def tomo_flyscan(
     lead_angle: float = 10.0,
     acquire_period: float = 0.0,
     time_trigger: bool = True,
+    raw_frames_per_projection: int = 1,
     reset_speed: float = TOMO_ROTARY_STAGE_VELO_RESET_MAX,
     use_shutter: bool = True,
     ph_open_cmd=None,
@@ -108,6 +109,12 @@ def tomo_flyscan(
     time_trigger : bool, optional
         True (default): PCOMP fires once, PULSE1 emits the time train.
         False: one PCOMP (position) pulse per projection.
+    raw_frames_per_projection : int, optional
+        Raw camera frames per delivered projection (default 1).  Used by
+        the frame-averaging variant: the camera acquires
+        num_projections x this many frames (one per PandA pulse) while the
+        Proc plugin averages them down, so the HDF writer still sees
+        num_projections frames.  Plain scans leave this at 1.
     reset_speed : float, optional
         Stage velocity for non-scan moves (capped at the reset max).
     use_shutter : bool, optional
@@ -134,6 +141,10 @@ def tomo_flyscan(
         )
     if num_projections < 2:
         raise ValueError(f"num_projections must be >= 2, got {num_projections}")
+    if raw_frames_per_projection < 1:
+        raise ValueError(
+            f"raw_frames_per_projection must be >= 1, got {raw_frames_per_projection}"
+        )
     if exposure_time <= 0:
         raise ValueError(f"exposure_time must be > 0, got {exposure_time}")
     if use_shutter and (ph_open_cmd is None or ph_close_cmd is None):
@@ -148,7 +159,9 @@ def tomo_flyscan(
     if (acquire_period + OVERHEAD) < exposure_time or acquire_period == 0.0:
         acquire_period = exposure_time + OVERHEAD
 
-    scan_time = (num_projections - 1) * acquire_period
+    raw_frames = num_projections * raw_frames_per_projection
+
+    scan_time = (raw_frames - 1) * acquire_period
     rot_motor_vel = abs(stop_deg - start_deg) / scan_time
     if rot_motor_vel > TOMO_ROTARY_STAGE_VELO_SCAN_MAX:
         rot_motor_vel = TOMO_ROTARY_STAGE_VELO_SCAN_MAX
@@ -214,8 +227,10 @@ def tomo_flyscan(
             livetime=exposure_time,
             deadtime=0.001,
         )
+        # The PandA pulses/captures once per RAW frame (the Angle series has
+        # one entry per pulse, like the legacy scripts).
         panda_trigger_info = TriggerInfo(
-            number_of_events=num_projections,
+            number_of_events=raw_frames,
             trigger=DetectorTrigger.EXTERNAL_LEVEL,
             livetime=acquire_period,
             deadtime=0.0001,
@@ -234,12 +249,12 @@ def tomo_flyscan(
         if time_trigger:
             yield from bps.mv(
                 panda_pcomp.pulses, 1,
-                panda_pulser.pulses, num_projections,
+                panda_pulser.pulses, raw_frames,
                 panda_pulser.step, step_time,
                 panda_pulser.width, exposure_time / 5,
             )
         else:
-            yield from bps.mv(panda_pcomp.pulses, num_projections)
+            yield from bps.mv(panda_pcomp.pulses, raw_frames)
         yield from bps.mv(panda.calc[2].out_dataset, "Angle")
 
         yield from bps.open_run(md=_md)
@@ -249,12 +264,19 @@ def tomo_flyscan(
         all_devices = [panda] + detectors
         for det in detectors:
             if hasattr(det.hdf, "queue_size"):
-                yield from bps.mv(det.hdf.queue_size, num_projections * 2)
+                yield from bps.mv(det.hdf.queue_size, raw_frames * 2)
 
         yield from bps.stage_all(*all_devices)
         staged["devices"] = all_devices
         for det in detectors:
             yield from bps.prepare(det, det_trigger_info, wait=True)
+            if raw_frames_per_projection > 1:
+                # prepare() sized the camera for num_projections (what the
+                # writer will see after Proc averaging); the camera itself
+                # must acquire every raw frame.  (KinetixTriggerLogic on
+                # 0.19 has no exposures_per_collection hook, so we widen
+                # num_images explicitly.)
+                yield from bps.mv(det.driver.num_images, raw_frames)
         yield from bps.prepare(panda, panda_trigger_info, wait=True)
 
         yield from bps.declare_stream(*all_devices, name="tomo")
