@@ -161,14 +161,6 @@ def tomo_flyscan(
 
     raw_frames = num_projections * raw_frames_per_projection
 
-    scan_time = (raw_frames - 1) * acquire_period
-    rot_motor_vel = abs(stop_deg - start_deg) / scan_time
-    if rot_motor_vel > TOMO_ROTARY_STAGE_VELO_SCAN_MAX:
-        rot_motor_vel = TOMO_ROTARY_STAGE_VELO_SCAN_MAX
-        scan_time = abs(stop_deg - start_deg) / rot_motor_vel
-
-    step_time = acquire_period
-
     reset_speed = min(reset_speed, TOMO_ROTARY_STAGE_VELO_RESET_MAX)
 
     output_path = None
@@ -199,26 +191,44 @@ def tomo_flyscan(
     staged: dict = {"devices": None}
 
     def _scan():
-        nonlocal step_time
-
         if use_shutter:
             if fe_shutter_status is not None:
                 if (yield from bps.rd(fe_shutter_status)) != 1:
                     raise RuntimeError("Front-end shutter is closed. Reopen it!")
             yield from open_photon_shutter(ph_open_cmd)
 
-        # Cap the frame rate by the camera's readout mode (Kinetix-specific;
-        # skipped for detectors without the signal).
+        # Frame period / sweep velocity / angular span form one consistent
+        # triangle, resolved HERE so every cap feeds back into the others
+        # (the profile plan adjusted the pulse period for the readout-mode
+        # cap after computing the velocity, letting the sweep desync from
+        # the trigger train; the pyepics script's recompute-from-the-cap
+        # behavior is restored):
+        #   1. step_time from acquire_period, capped by the camera's
+        #      readout-mode max frame rate (Kinetix-specific; skipped for
+        #      detectors without the signal);
+        #   2. sweep velocity from the span and RAW frame count;
+        #   3. if the velocity cap engages, stretch step_time to match;
+        #   4. the exposure must fit the final step_time.
+        step_time = acquire_period
         for det in detectors:
             if hasattr(det.driver, "readout_port_idx"):
                 readout_mode = yield from bps.rd(det.driver.readout_port_idx)
                 max_rate = DETECTOR_MAX_FRAMERATES.get(readout_mode)
                 if max_rate and 1 / step_time > max_rate:
                     step_time = 1 / max_rate
+
+        scan_time = (raw_frames - 1) * step_time
+        rot_motor_vel = abs(stop_deg - start_deg) / scan_time
+        if rot_motor_vel > TOMO_ROTARY_STAGE_VELO_SCAN_MAX:
+            rot_motor_vel = TOMO_ROTARY_STAGE_VELO_SCAN_MAX
+            scan_time = abs(stop_deg - start_deg) / rot_motor_vel
+            step_time = scan_time / (raw_frames - 1)
+
         if exposure_time > step_time:
             raise RuntimeError(
-                f"Exposure time {exposure_time} s is longer than the time "
-                f"per step {step_time} s!"
+                f"Exposure time {exposure_time} s is longer than the final "
+                f"time per step {step_time:.6g} s (after readout-rate and "
+                f"velocity caps)!"
             )
 
         det_trigger_info = TriggerInfo(
@@ -232,7 +242,7 @@ def tomo_flyscan(
         panda_trigger_info = TriggerInfo(
             number_of_events=raw_frames,
             trigger=DetectorTrigger.EXTERNAL_LEVEL,
-            livetime=acquire_period,
+            livetime=step_time,
             deadtime=0.0001,
         )
 

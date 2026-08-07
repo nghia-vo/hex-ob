@@ -51,8 +51,16 @@ def configure_averaging(detector, frames_to_average: int):
     ``enable_filter`` helpers.
     """
     proc = detector.proc
-    saved_port = yield from bps.rd(detector.hdf.nd_array_port)
-    camera_port = saved_port
+    proc_port = yield from bps.rd(proc.port_name)
+    hdf_port = yield from bps.rd(detector.hdf.nd_array_port)
+    if hdf_port == proc_port:
+        # Already routed through the proc plugin (e.g. a previous run died
+        # before restore). The true upstream is proc's current source —
+        # using hdf_port here would wire proc to itself.
+        camera_port = yield from bps.rd(proc.nd_array_port)
+    else:
+        camera_port = hdf_port
+    saved_port = camera_port
 
     yield from bps.mv(proc.nd_array_port, camera_port)
     yield from bps.mv(proc.enable_callbacks, EnableDisable.ENABLE)
@@ -64,7 +72,6 @@ def configure_averaging(detector, frames_to_average: int):
     yield from bps.mv(proc.auto_reset_filter, "Yes")
     yield from bps.mv(proc.filter_callbacks, "Array N only")
 
-    proc_port = yield from bps.rd(proc.port_name)
     yield from bps.mv(detector.hdf.nd_array_port, proc_port)
     return saved_port
 
@@ -75,6 +82,9 @@ def restore_averaging(detector, saved_port):
     yield from bps.mv(proc.enable_filter, "Disable")
     yield from bps.mv(proc.num_filter, 1)
     yield from bps.mv(detector.hdf.nd_array_port, saved_port)
+    # Nothing consumes from proc anymore — stop it processing every frame
+    # (the legacy scripts' disable_plugin("Proc1")).
+    yield from bps.mv(proc.enable_callbacks, EnableDisable.DISABLE)
 
 
 def tomo_flyscan_average(
