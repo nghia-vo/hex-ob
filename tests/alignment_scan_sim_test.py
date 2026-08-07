@@ -25,6 +25,7 @@ names are the real beamline names; this must never touch a real gateway.
 
 import os
 import sys
+import time
 from collections import Counter
 from pathlib import Path
 
@@ -87,6 +88,7 @@ def main() -> None:
     docs: list[tuple[str, dict]] = []
     RE.subscribe(lambda name, doc: docs.append((name, doc)))
 
+    scan_started = time.time()
     RE(
         alignment_scan(
             kinetix1,
@@ -118,22 +120,37 @@ def main() -> None:
     assert events["flat"] == NUM_FLATS, f"flat events: {events}"
     print(f"PASS  event streams (primary={NUM_PROJECTIONS}, flat={NUM_FLATS})")
 
-    hdf_files = sorted(HOST_OUTPUT_DIR.glob("*.h5")) + sorted(HOST_OUTPUT_DIR.glob("*.hdf*"))
-    assert hdf_files, f"no HDF file under {HOST_OUTPUT_DIR}"
+    # Only consider files (re)written by THIS run — the output directory may
+    # hold files from previous runs (which the host often cannot delete: the
+    # IOC container writes them as root), and validating a stale file would
+    # mask regressions. The IOC writes through a bind mount on the same host,
+    # so mtimes are directly comparable; the 1 s slack absorbs coarse
+    # filesystem timestamp granularity.
+    hdf_files = sorted(
+        (
+            p
+            for pattern in ("*.h5", "*.hdf", "*.hdf5")
+            for p in HOST_OUTPUT_DIR.glob(pattern)
+            if p.stat().st_mtime >= scan_started - 1
+        ),
+        key=lambda p: p.stat().st_mtime,
+    )
+    assert hdf_files, f"no HDF file written under {HOST_OUTPUT_DIR} by this run"
+    hdf_file = hdf_files[-1]
     expected_frames = NUM_PROJECTIONS + NUM_FLATS
     try:
         import h5py
 
-        with h5py.File(hdf_files[0], "r") as f:
+        with h5py.File(hdf_file, "r") as f:
             n_frames = f["/entry/data/data"].shape[0]
         assert n_frames == expected_frames, (
             f"expected {expected_frames} frames, HDF has {n_frames}"
         )
-        print(f"PASS  HDF file {hdf_files[0].name}: {n_frames} frames")
+        print(f"PASS  HDF file {hdf_file.name}: {n_frames} frames")
     except ImportError:
-        size = hdf_files[0].stat().st_size
-        assert size > 0, f"HDF file {hdf_files[0]} is empty"
-        print(f"PASS  HDF file exists ({hdf_files[0].name}, {size} bytes; h5py absent)")
+        size = hdf_file.stat().st_size
+        assert size > 0, f"HDF file {hdf_file} is empty"
+        print(f"PASS  HDF file exists ({hdf_file.name}, {size} bytes; h5py absent)")
 
     print("\nALL PASS")
 

@@ -156,8 +156,11 @@ def alignment_scan(
     output_path = Path(output_dir)
     path_provider = getattr(detector, "path_provider", None)
     if path_provider is None or not hasattr(path_provider, "set"):
+        # This branch handles misconfigured detector objects, which may not
+        # have .name either — don't let the error message itself raise.
+        detector_label = getattr(detector, "name", type(detector).__name__)
         raise TypeError(
-            f"{detector.name} has no settable path provider; build it with "
+            f"{detector_label} has no settable path provider; build it with "
             "lib.detectors.make_kinetix so alignment_scan can direct its "
             "output to output_dir."
         )
