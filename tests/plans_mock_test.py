@@ -23,6 +23,7 @@ from plans.tomography import (
     scan_1d,
     take_dark_flat,
     take_radiograph,
+    tomo_flyscan,
 )
 
 OUT = "/tmp/hex-ob-mock/scan_test"
@@ -84,6 +85,45 @@ def main() -> None:
     rot = asyncio.run(bl.rot_stage.user_readback.get_value())
     assert rot == 9.0, f"alignment_scan should restore rotation, got {rot}"
     print("PASS  alignment_scan (5 primary + 2 flat, rotation restored)")
+
+    # -- tomo_flyscan (structural: mock device tree + validation) -----------
+    # The fly path (PandA kickoff/complete + PCAP) is functionally verified
+    # against the simulated beamline (tests/tomo_flyscan_sim_test.py); under
+    # mock we verify the panda device tree builds and argument validation.
+    def start_plan(gen):
+        """Drive the generator to its first message (plan bodies don't run
+        until first next()), then shut it down."""
+        msg = next(gen)
+        try:
+            gen.close()
+        except RuntimeError:
+            pass  # finalizer yields cleanup messages during close
+        return msg
+
+    msg = start_plan(tomo_flyscan(
+        bl.detector, bl.panda, bl.rot_stage,
+        ph_open_cmd=bl.ph_open_cmd, ph_close_cmd=bl.ph_close_cmd,
+        output_dir=OUT, exposure_time=0.015, num_projections=61,
+        start_deg=0, stop_deg=30,
+    ))
+    assert msg is not None
+    for bad_kwargs, expect in [
+        (dict(num_projections=1), "num_projections"),
+        (dict(num_projections=61, exposure_time=0.0), "exposure_time"),
+        (dict(num_projections=61, ph_open_cmd=None, ph_close_cmd=None), "use_shutter"),
+    ]:
+        kwargs = dict(
+            output_dir=OUT, exposure_time=0.015,
+            ph_open_cmd=bl.ph_open_cmd, ph_close_cmd=bl.ph_close_cmd,
+        )
+        kwargs.update(bad_kwargs)
+        try:
+            start_plan(tomo_flyscan(bl.detector, bl.panda, bl.rot_stage, **kwargs))
+        except ValueError as exc:
+            assert expect in str(exc), exc
+        else:
+            raise AssertionError(f"expected ValueError for {bad_kwargs}")
+    print("PASS  tomo_flyscan (structural: builds with mock panda; validation raises)")
 
     print("\nALL PASS")
 

@@ -37,6 +37,7 @@ except ImportError:
     )
 
 from lib.detectors import make_kinetix
+from lib.panda import make_panda
 
 
 class MockBeamline:
@@ -48,11 +49,13 @@ class MockBeamline:
         # exit — bind locals first, then attach to self.
         with init_devices(mock=True):
             detector = make_kinetix(1)
+            panda = make_panda(1)
             rot_stage = Motor("XF:MOCK{MC:5-Ax:4}Mtr", name="rot_stage")
             sample_x = Motor("XF:MOCK{SMPL:1-Ax:X1}Mtr", name="sample_x")
             ph_open_cmd = epics_signal_rw(int, "XF:MOCK{Sh}Opn", name="ph_open_cmd")
             ph_close_cmd = epics_signal_rw(int, "XF:MOCK{Sh}Cls", name="ph_close_cmd")
         self.detector = detector
+        self.panda = panda
         self.rot_stage = rot_stage
         self.sample_x = sample_x
         self.ph_open_cmd = ph_open_cmd

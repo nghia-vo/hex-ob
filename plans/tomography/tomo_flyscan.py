@@ -1,0 +1,282 @@
+"""
+Hardware-triggered fly-scan tomography plan for HEX beamline.
+
+Equivalent of the old pyepics script:
+    hex-acq-pyepics/techniques/tomography/kinetix/tomo_flyscan.py
+and the parametrized successor of hex-profile-collection's
+``startup/85-fly-plans.py::tomo_flyscan`` (devices are arguments here, not
+profile globals).
+
+What this plan does
+-------------------
+1.  Optionally checks the front-end status and opens the photon shutter.
+2.  Moves the rotation stage to *start_deg* (to read the PandA encoder
+    value), backs off by *lead_angle*, and sets the scan velocity computed
+    from the angular range and frame period.
+3.  Configures the PandA: PCOMP armed at the start-angle encoder count; in
+    time-trigger mode PCOMP fires once and PULSE1 emits *num_projections*
+    pulses at the frame period (position-trigger mode: one PCOMP pulse per
+    projection).  ``calc[2]`` (the angle calculation) is captured to the
+    PandA HDF file as the ``Angle`` dataset.
+4.  Stages+prepares detector(s) (external-edge triggering) and the PandA,
+    kicks everything off, sweeps the rotation stage to *stop_deg* +
+    *lead_angle*, and collects into the ``tomo`` stream while completing.
+5.  Finalizer: closes the shutter (when used) and restores the reset
+    velocity — runs even on error/interrupt.
+
+Outputs: the detector HDF file (``proj``) and the PandA HDF file
+(``panda`` — with the per-trigger ``Angle`` dataset) under *output_dir*.
+
+Usage
+-----
+    RE(tomo_flyscan(
+        kinetix1, panda1, rot_stage,
+        ph_open_cmd=ph_open_cmd, ph_close_cmd=ph_close_cmd,
+        output_dir=".../raw_data/scan_00001",
+        exposure_time=0.015, num_projections=1801,
+        start_deg=0, stop_deg=180,
+    ))
+"""
+
+from collections.abc import Sequence
+
+import bluesky.plan_stubs as bps
+import bluesky.preprocessors as bpp
+from ophyd_async.core import DetectorTrigger, TriggerInfo
+from ophyd_async.epics.adkinetix import KinetixReadoutMode
+
+from lib.detectors import set_output_dir
+from lib.shutter import close_photon_shutter, open_photon_shutter
+
+# Kinetix per-readout-mode frame-rate ceilings (fps) — from the profile.
+DETECTOR_MAX_FRAMERATES = {
+    KinetixReadoutMode.SENSITIVITY: 50,
+    KinetixReadoutMode.SPEED: 250,
+    KinetixReadoutMode.DYNAMIC_RANGE: 75,
+}
+
+TOMO_ROTARY_STAGE_VELO_RESET_MAX = 30  # deg/s, non-scan moves
+TOMO_ROTARY_STAGE_VELO_SCAN_MAX = 60   # deg/s, during the sweep
+OVERHEAD = 0.005                       # s, minimum frame-period overhead
+
+
+def tomo_flyscan(
+    detectors,
+    panda,
+    rot_stage,
+    *,
+    output_dir: str,
+    exposure_time: float,
+    num_projections: int,
+    start_deg: float = 0.0,
+    stop_deg: float = 180.0,
+    lead_angle: float = 10.0,
+    acquire_period: float = 0.0,
+    time_trigger: bool = True,
+    reset_speed: float = TOMO_ROTARY_STAGE_VELO_RESET_MAX,
+    use_shutter: bool = True,
+    ph_open_cmd=None,
+    ph_close_cmd=None,
+    fe_shutter_status=None,
+    md: dict | None = None,
+):
+    """
+    Fly-scan tomography: rotate continuously, PandA-triggered frames.
+
+    Parameters
+    ----------
+    detectors : device or sequence of devices
+        The camera(s), built by ``lib.detectors.make_kinetix`` (dual-cam
+        later passes two).
+    panda : HDFPanda
+        Built by ``lib.panda.make_panda`` — trigger source + Angle capture.
+    rot_stage : Motor
+        The tomography rotation stage.
+    output_dir : str
+        Directory for both HDF files (the old script's scan_NNNNN folder).
+    exposure_time : float
+        Camera exposure per projection, seconds.
+    num_projections : int
+        Number of projections (e.g. 1801).
+    start_deg / stop_deg : float, optional
+        Angular range of the scan. Defaults 0 / 180.
+    lead_angle : float, optional
+        Run-up/run-out angle so the stage is at constant speed across the
+        range. Default 10.
+    acquire_period : float, optional
+        Frame period; 0 (default) derives exposure + overhead.
+    time_trigger : bool, optional
+        True (default): PCOMP fires once, PULSE1 emits the time train.
+        False: one PCOMP (position) pulse per projection.
+    reset_speed : float, optional
+        Stage velocity for non-scan moves (capped at the reset max).
+    use_shutter : bool, optional
+        Check front-end (when *fe_shutter_status* given) and drive the
+        photon shutter via *ph_open_cmd*/*ph_close_cmd*. Default True.
+    ph_open_cmd / ph_close_cmd : signal, optional
+        Photon-shutter command signals (required when *use_shutter*).
+    fe_shutter_status : signal, optional
+        Front-end status readback; checked == 1 when provided.
+    md : dict, optional
+        Extra run metadata.
+    """
+    if not isinstance(detectors, Sequence):
+        detectors = [detectors]
+    detectors = list(detectors)
+
+    if num_projections < 2:
+        raise ValueError(f"num_projections must be >= 2, got {num_projections}")
+    if exposure_time <= 0:
+        raise ValueError(f"exposure_time must be > 0, got {exposure_time}")
+    if use_shutter and (ph_open_cmd is None or ph_close_cmd is None):
+        raise ValueError(
+            "use_shutter=True needs ph_open_cmd and ph_close_cmd "
+            "(or pass use_shutter=False)."
+        )
+
+    # ------------------------------------------------------------------
+    # Kinematics (same rules as the pyepics script / profile plan)
+    # ------------------------------------------------------------------
+    if (acquire_period + OVERHEAD) < exposure_time or acquire_period == 0.0:
+        acquire_period = exposure_time + OVERHEAD
+
+    scan_time = (num_projections - 1) * acquire_period
+    rot_motor_vel = abs(stop_deg - start_deg) / scan_time
+    if rot_motor_vel > TOMO_ROTARY_STAGE_VELO_SCAN_MAX:
+        rot_motor_vel = TOMO_ROTARY_STAGE_VELO_SCAN_MAX
+        scan_time = abs(stop_deg - start_deg) / rot_motor_vel
+
+    step_time = acquire_period
+
+    reset_speed = min(reset_speed, TOMO_ROTARY_STAGE_VELO_RESET_MAX)
+
+    output_path = None
+    for det in detectors:
+        output_path = set_output_dir(det, output_dir, "proj")
+    set_output_dir(panda, output_dir, "panda")
+
+    _md = {
+        "plan_name": "tomo_flyscan",
+        "detectors": [det.name for det in detectors],
+        "motors": [rot_stage.name],
+        "output_dir": str(output_path),
+        "exposure_time": exposure_time,
+        "num_projections": num_projections,
+        "start_deg": start_deg,
+        "stop_deg": stop_deg,
+        "lead_angle": lead_angle,
+        "time_trigger": time_trigger,
+        "hints": {},
+    }
+    _md.update(md or {})
+
+    panda_pcomp = panda.pcomp[1]
+    panda_pulser = panda.pulse[1]
+
+    def _scan():
+        nonlocal step_time
+
+        if use_shutter:
+            if fe_shutter_status is not None:
+                if (yield from bps.rd(fe_shutter_status)) != 1:
+                    raise RuntimeError("Front-end shutter is closed. Reopen it!")
+            yield from open_photon_shutter(ph_open_cmd)
+
+        # Cap the frame rate by the camera's readout mode (Kinetix-specific;
+        # skipped for detectors without the signal).
+        for det in detectors:
+            if hasattr(det.driver, "readout_port_idx"):
+                readout_mode = yield from bps.rd(det.driver.readout_port_idx)
+                max_rate = DETECTOR_MAX_FRAMERATES.get(readout_mode)
+                if max_rate and 1 / step_time > max_rate:
+                    step_time = 1 / max_rate
+        if exposure_time > step_time:
+            raise RuntimeError(
+                f"Exposure time {exposure_time} s is longer than the time "
+                f"per step {step_time} s!"
+            )
+
+        det_trigger_info = TriggerInfo(
+            number_of_events=num_projections,
+            trigger=DetectorTrigger.EXTERNAL_EDGE,
+            livetime=exposure_time,
+            deadtime=0.001,
+        )
+        panda_trigger_info = TriggerInfo(
+            number_of_events=num_projections,
+            trigger=DetectorTrigger.EXTERNAL_LEVEL,
+            livetime=acquire_period,
+            deadtime=0.0001,
+        )
+
+        # -- position the stage and read the start-angle encoder count ----
+        yield from bps.mv(rot_stage.velocity, reset_speed)
+        yield from bps.mv(rot_stage, start_deg)
+        start_encoder = yield from bps.rd(panda.calc[2].out)
+        yield from bps.mv(rot_stage, start_deg - lead_angle)
+        yield from bps.mv(rot_stage.velocity, rot_motor_vel)
+
+        # -- PandA block configuration ------------------------------------
+        yield from bps.mv(panda_pcomp.start, int(start_encoder))
+        yield from bps.mv(panda_pcomp.width, 3)
+        if time_trigger:
+            yield from bps.mv(
+                panda_pcomp.pulses, 1,
+                panda_pulser.pulses, num_projections,
+                panda_pulser.step, step_time,
+                panda_pulser.width, exposure_time / 5,
+            )
+        else:
+            yield from bps.mv(panda_pcomp.pulses, num_projections)
+        yield from bps.mv(panda.calc[2].out_dataset, "Angle")
+
+        yield from bps.open_run(md=_md)
+        print(f"\nExecuting tomography fly scan: {num_projections} projections, "
+              f"{start_deg:g} -> {stop_deg:g} deg at {rot_motor_vel:.3g} deg/s")
+
+        all_devices = [panda] + detectors
+        for det in detectors:
+            if hasattr(det.hdf, "queue_size"):
+                yield from bps.mv(det.hdf.queue_size, num_projections * 2)
+
+        yield from bps.stage_all(*all_devices)
+        for det in detectors:
+            yield from bps.prepare(det, det_trigger_info, wait=True)
+        yield from bps.prepare(panda, panda_trigger_info, wait=True)
+
+        yield from bps.declare_stream(*all_devices, name="tomo")
+        yield from bps.kickoff_all(*all_devices, wait=True)
+
+        # Sweep. The set() status is held while we collect.
+        movement_status = rot_stage.set(stop_deg + lead_angle, wait=False)
+
+        current_pos = yield from bps.rd(rot_stage)
+        while current_pos < start_deg:
+            yield from bps.sleep(0.1)
+            current_pos = yield from bps.rd(rot_stage)
+
+        print("Completing...")
+        yield from bps.collect_while_completing(
+            all_devices, all_devices,
+            flush_period=max(1, exposure_time),
+            stream_name="tomo",
+        )
+        yield from bps.unstage_all(*all_devices)
+
+        movement_status.wait()
+        yield from bps.close_run()
+
+        # Report captured counts (parity with the profile plan).
+        captured = {panda.name: (yield from bps.rd(panda.data.num_captured))}
+        for det in detectors:
+            captured[det.name] = yield from bps.rd(det.hdf.num_captured)
+        print("Number of frames captured:")
+        for name, count in captured.items():
+            print(f"    {name:15}: {count}")
+
+    def _cleanup():
+        if use_shutter and ph_close_cmd is not None:
+            yield from close_photon_shutter(ph_close_cmd)
+        yield from bps.mv(rot_stage.velocity, reset_speed)
+
+    return (yield from bpp.finalize_wrapper(_scan(), _cleanup()))
