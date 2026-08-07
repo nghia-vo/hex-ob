@@ -2,7 +2,7 @@
 Functional test: alignment_scan against the simulated HEX beamline.
 
 Runs the real plan with the real devices from lib/ against
-hxm_program/simulated_beamlines/HEX (Kinetix-Det:1 = real AreaDetector IOC
+hex-ob/hex-simulated-beamline (Kinetix-Det:1 = real AreaDetector IOC
 with the Kinetix personality; rotation stage and sample_x = caproto
 FakeMotor records on the sim motor IOC; the shutter command PVs are
 fabricated by the blackhole IOC), then asserts:
@@ -15,7 +15,7 @@ fabricated by the blackhole IOC), then asserts:
 Prerequisites: sim up (scripts/up_all.sh) and the loopback EPICS client env
 (scripts/env.sh) sourced.  Run from the hex-ob root:
 
-    source ~/git_projects/hxm_program/simulated_beamlines/HEX/scripts/env.sh
+    source ~/git_projects/hex-ob/hex-simulated-beamline/scripts/env.sh
     cd hex-profile-collection && \
     PYTHONPATH=.. pixi run -e terminal python ../tests/alignment_scan_sim_test.py
 
