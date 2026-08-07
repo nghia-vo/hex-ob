@@ -1,0 +1,25 @@
+# Minimal self-contained test environment for hex-ob's mock-tier tests.
+#
+# Deliberately duplicates hex-profile-collection's ophyd-async pin
+# (">=0.19.3,<0.20"): CI failing when the two drift apart is the version-skew
+# signal we want, not an accident. The full profile env (EPICS, Tiled, ...)
+# stays in hex-profile-collection/pixi.toml; this env only needs to import
+# lib/ + plans/ and drive mock signal backends.
+
+[project]
+name = "hex-ob"
+channels = ["conda-forge"]
+platforms = ["linux-64"]
+
+[dependencies]
+python = "3.12.*"
+pip = "*"
+
+[pypi-dependencies]
+ophyd-async = { version = ">=0.19.3,<0.20", extras = ["ca", "pva"] }
+bluesky = "*"
+numpy = "*"
+pytest = "*"
+
+[tasks]
+test-mock = "python tests/alignment_scan_mock_test.py"
