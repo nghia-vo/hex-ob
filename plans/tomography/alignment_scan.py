@@ -6,7 +6,9 @@ Equivalent of the old pyepics script:
 
 What this plan does
 -------------------
-1.  Opens the photon shutter (checks front-end is open first).
+1.  Opens the photon shutter.  (The old script's front-end status check is NOT
+    ported yet — it arrives with the shared beam-check helpers from
+    lib_device_control; until then the operator confirms the front end.)
 2.  Moves the rotation stage to each angle in linspace(start, stop, num_projections).
 3.  Takes one image at every angle with the Kinetix camera (free-run, internal
     trigger — exposure configured through the detector's ``prepare``).
@@ -14,7 +16,10 @@ What this plan does
     acquires *num_flats* frames into a separate "flat" event stream, then
     moves the sample back.
 5.  Closes the photon shutter when finished (unless *keep_shutter_open* is True).
-6.  Restores the rotation stage to its original angle.
+6.  Restores the rotation stage to its original angle and velocity.
+
+Everything from shutter-open onward runs under a finalizer, so an error or
+interrupt at any point still closes the shutter and restores the stage.
 
 Output path
 -----------
@@ -188,20 +193,10 @@ def alignment_scan(
     angles = np.linspace(start_angle, stop_angle, num_projections)
 
     # ------------------------------------------------------------------
-    # Remember initial positions so we can restore them at the end
+    # Remember initial state so we can restore it at the end
     # ------------------------------------------------------------------
     init_angle = yield from bps.rd(rot_stage)
-
-    # ------------------------------------------------------------------
-    # Open photon shutter
-    # ------------------------------------------------------------------
-    yield from _open_photon_shutter(ph_open_cmd)
-
-    # ------------------------------------------------------------------
-    # Move rotation stage to start angle at scan velocity
-    # ------------------------------------------------------------------
-    yield from bps.mv(rot_stage.velocity, scan_velocity)
-    yield from bps.mv(rot_stage, start_angle)
+    init_velocity = yield from bps.rd(rot_stage.velocity)
 
     # ------------------------------------------------------------------
     # Run: stage detector, open a Bluesky run, acquire projections
@@ -253,13 +248,29 @@ def alignment_scan(
             print("-" * 52)
 
     # ---------------------------------------------------------------
+    # Body under the finalizer: everything from shutter-open onward, so
+    # an error/interrupt at ANY point after the shutter opens (including
+    # the initial positioning) still runs _cleanup.
+    # ---------------------------------------------------------------
+    def _body():
+        yield from _open_photon_shutter(ph_open_cmd)
+
+        # Move rotation stage to start angle at scan velocity
+        yield from bps.mv(rot_stage.velocity, scan_velocity)
+        yield from bps.mv(rot_stage, start_angle)
+
+        yield from _inner_scan()
+
+    # ---------------------------------------------------------------
     # Cleanup: always runs even on interrupt or error
     # ---------------------------------------------------------------
     def _cleanup():
         if not keep_shutter_open:
             yield from _close_photon_shutter(ph_close_cmd)
-        # Restore rotation stage to its original angle
+        # Restore rotation stage to its original angle and velocity
         yield from bps.mv(rot_stage, init_angle)
-        print(f"  Rotation stage restored to {init_angle:.3f} deg")
+        yield from bps.mv(rot_stage.velocity, init_velocity)
+        print(f"  Rotation stage restored to {init_angle:.3f} deg "
+              f"(velocity {init_velocity:g})")
 
-    return (yield from bpp.finalize_wrapper(_inner_scan(), _cleanup()))
+    return (yield from bpp.finalize_wrapper(_body(), _cleanup()))
