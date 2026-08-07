@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HEX sim — how signals travel</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1a1a1a; --muted: #666;
+    --exact: #1a7f37; --exact-bg: #e6f4ea;
+    --bridge: #9a6700; --bridge-bg: #fff3d6;
+    --box: #f4f6f8; --border: #ccc;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14161a; --fg: #e6e6e6; --muted: #9aa0a6;
+      --exact: #6fcf8e; --exact-bg: #12331c;
+      --bridge: #e2b93b; --bridge-bg: #3a2f0d;
+      --box: #1e2228; --border: #444;
+    }
+  }
+  body { background: var(--bg); color: var(--fg); font: 15px/1.5 system-ui, sans-serif;
+         max-width: 900px; margin: 2rem auto; padding: 0 1rem; }
+  h1 { font-size: 1.4rem; }  h2 { font-size: 1.1rem; margin-top: 2rem; }
+  p.sub { color: var(--muted); }
+  .row { display: flex; align-items: center; flex-wrap: wrap; gap: .25rem .4rem; margin: 1rem 0; }
+  .box { background: var(--box); border: 1.5px solid var(--border); border-radius: 8px;
+         padding: .5rem .8rem; text-align: center; }
+  .box small { display: block; color: var(--muted); }
+  .panda { border-style: solid; border-width: 2px; padding: .6rem .9rem; border-radius: 10px; }
+  .arrow { font-weight: 600; white-space: nowrap; }
+  .exact  { border-color: var(--exact);  }  .arrow.exact  { color: var(--exact); }
+  .bridge { border-color: var(--bridge); }  .arrow.bridge { color: var(--bridge); }
+  .tag { font-size: .75rem; border-radius: 999px; padding: .1rem .6rem; font-weight: 600; }
+  .tag.exact  { background: var(--exact-bg);  color: var(--exact); }
+  .tag.bridge { background: var(--bridge-bg); color: var(--bridge); }
+  .legend { display: flex; gap: 1rem; flex-wrap: wrap; margin: 1rem 0 0; }
+  ul { margin: .3rem 0; }
+  footer { color: var(--muted); font-size: .85rem; margin-top: 2.5rem;
+           border-top: 1px solid var(--border); padding-top: .6rem; }
+  code { background: var(--box); padding: 0 .3em; border-radius: 4px; }
+</style>
+</head>
+<body>
+
+<h1>Simulated HEX beamline — how signals travel</h1>
+<p class="sub">Answering: how does the sim track the PandA reading the motor's encoder,
+and the trigger signal going from the PandA to the detector?</p>
+
+<div class="legend">
+  <span class="tag exact">EXACT — real block logic (FPGA block-sim engine, real design)</span>
+  <span class="tag bridge">SOFTWARE BRIDGE — replaces an electrical wire (verified)</span>
+</div>
+
+<h2>1&nbsp;· Motor encoder → PandA <span class="tag bridge">bridged</span></h2>
+<div class="row">
+  <div class="box">motor IOC<small>caproto FakeMotor · CA :5075<br>RBV ramps, DMOV cycles</small></div>
+  <span class="arrow bridge">─ camonitor RBV ─▶</span>
+  <div class="box bridge">motor_encoder_bridge.py<small>deg → counts (raw = 39660 − 200·deg)<br>slew-limited: can't hop PCOMP</small></div>
+  <span class="arrow bridge">─ TCP :9101 “INENC1 VAL n” ─▶</span>
+  <div class="box panda exact">PandA engine<small>INENC1 → position bus →<br>PCOMP1.INP &amp; CALC2</small></div>
+</div>
+<p>From inside the PandA this is indistinguishable from a wired encoder: PCOMP1 fires when
+the position crosses the programmed angle. Verified by the capture test suite.</p>
+
+<h2>2&nbsp;· PandA → detector trigger <span class="tag bridge">bridged (opt-in)</span></h2>
+<div class="row">
+  <div class="box panda exact">PCOMP1<small>fires at start angle</small></div>
+  <span class="arrow exact">─▶</span>
+  <div class="box panda exact">PULSE1<small>N-pulse train</small></div>
+  <span class="arrow exact">─▶</span>
+  <div class="box panda exact">PCAP + COUNTER3<small>captures Angle per pulse ·<br>cumulative tally (1801 = real box)</small></div>
+  <span class="arrow bridge">─ camonitor COUNTER3:OUT ─▶</span>
+  <div class="box bridge">ttl_trigger_bridge.py<small>one Acquire poke per new pulse ·<br>cumulative tally ⇒ self-healing</small></div>
+  <span class="arrow bridge">─ caput Acquire ─▶</span>
+  <div class="box">Kinetix IOC<small>real AreaDetector · CA :5085<br>ImageMode=Single: 1 frame/pulse</small></div>
+</div>
+<p>Everything up to <code>TTLOUT1</code> is exact — every pulse is tracked and its angle
+captured. The TTL cable is replaced by a bridge on the <em>tally</em> (verified: 5 pulses →
+5 pokes → 5 real frames): watching the cumulative counter instead of the pulse bit means a
+missed update heals by the delta, and the counter's reset-on-arm rebaselines it. <strong>
+Opt-in</strong>: the free-running pyepics oracle must not run it (double-drive) — its
+totals-based checks (361 = 361 = 361) never needed per-pulse correspondence.</p>
+
+<h2>The one-sentence answer</h2>
+<p><strong>Block-to-block signals are exact</strong> — the sim runs the beamline's real
+<code>Tomo_radio_1_config</code> design on the cycle-accurate PandABlocks-FPGA block-sim
+engine. <strong>Box-to-box wires are software bridges, both verified</strong> —
+motor→encoder always on; PandA→camera TTL opt-in (one frame per pulse; keep it off for
+free-running runs like the pyepics oracle).</p>
+
+<footer>simulated_beamlines/HEX — see README.md §“How signals travel” and PROGRESS.md.
+2026-08-03.</footer>
+
+</body>
+</html>

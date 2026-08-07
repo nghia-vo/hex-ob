@@ -1,0 +1,47 @@
+# Simulated HEX Kinetix — frame tier (Phase 2A, controls-level mock)
+#
+# Runs the REAL AreaDetector IOC built by nsls2.ioc_deploy's adsimdetector
+# role (see ../iocs/kinetix/hexsim-kinetix1.yml for the deploy config and
+# PROGRESS.md for the build steps). ADSimDetector produces real frames through
+# the production cam/HDF/TIFF plugin machinery under the real HEX prefix
+# XF:27ID1-BI{Kinetix-Det:1}.
+#
+# The image is a snapshot of the deploy container:
+#   docker commit nsls2_ioc_deploy_el8 hexsim-kinetix-ioc:local
+#
+# CA is served on a DEDICATED port :5085 (a second EPICS server on :5064
+# beside panda-ioc would go deaf to unicast searches — same reason the motor
+# IOC lives on :5075) and BINDS LOOPBACK ONLY (beamline-safety guardrail).
+# Clients: add 127.0.0.1:5085 to EPICS_CA_ADDR_LIST (scripts/env.sh does).
+#
+# Run alongside the rest of the sim:
+#   docker compose -f compose/docker-compose.kinetix.yml up -d
+name: hexsim
+
+services:
+  kinetix-ioc:
+    image: hexsim-kinetix-ioc:local
+    container_name: hexsim-kinetix-ioc
+    network_mode: host
+    # iocsh needs a terminal; keep stdin open so it doesn't EOF-exit.
+    stdin_open: true
+    tty: true
+    working_dir: /epics/iocs/kinetix-sim1/iocBoot
+    command: ["./st.cmd"]
+    environment:
+      EPICS_CAS_INTF_ADDR_LIST: "127.0.0.1"
+      EPICS_CAS_SERVER_PORT: "5085"
+      EPICS_CA_SERVER_PORT: "5085"
+      EPICS_CA_AUTO_ADDR_LIST: "NO"
+      EPICS_CA_ADDR_LIST: "127.0.0.1"
+    volumes:
+      # Detector HDF/TIFF output shared with the host (same convention as the
+      # PandA HDF dir).
+      - /tmp/hex-sim-data:/tmp/hex-sim-data
+      # The acquisition scripts write under /nsls2/data/hex/proposals/... —
+      # inside this container that path is the SIM storage tree created by
+      # scripts/sync_sim_experiment.sh (sentinel data_session pass-000000,
+      # _SIMULATED_DATA_README at its root). The host never has a real
+      # /nsls2; real proposal storage is untouchable by construction.
+      - /tmp/hex-sim-data/nsls2:/nsls2
+    restart: unless-stopped

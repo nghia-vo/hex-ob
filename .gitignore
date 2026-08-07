@@ -13,3 +13,7 @@ ref
 .venv/
 __pycache__/
 .idea
+# hex-simulated-beamline: machine-local state, never committed
+hex-simulated-beamline/.toolenv/
+hex-simulated-beamline/.reflow2/
+hex-simulated-beamline/**/__pycache__/

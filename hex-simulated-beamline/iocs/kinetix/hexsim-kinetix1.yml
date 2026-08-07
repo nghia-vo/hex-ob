@@ -1,0 +1,25 @@
+# HEX sim — Kinetix frame tier (Phase 2A, controls-level mock).
+#
+# Deployed with nsls2.ioc_deploy's adsimdetector role into a local container
+# (the facility-native path — same ansible roles as production beamlines):
+#
+#   cd ~/git_projects/nsls2.ioc_deploy
+#   pixi run deployment -- --container \
+#       -c ~/git_projects/hxm_program/simulated_beamlines/HEX/iocs/kinetix/hexsim-kinetix1.yml
+#
+# ADSimDetector produces REAL frames through the production cam/HDF plugin
+# machinery with the real HEX Kinetix-Det:1 PV prefix, so the pyepics
+# tomography scripts' camera leg (Acquire, NumImages, HDF1:NumCaptured_RBV,
+# file writing/close) behaves like the real IOC. The Kinetix-specific
+# ReadoutPortIdx/ApplyReadoutMode PVs are absent (tomo_flyscan.py never
+# touches them); the camera free-runs at AcquirePeriod instead of following
+# the PandA TTL (functional tier — documented in PROGRESS.md).
+
+kinetix-sim1:
+  type: "adsimdetector"
+
+  environment:
+    PREFIX: "XF:27ID1-BI{Kinetix-Det:1}"
+    ENGINEER: "HEX sim (AJ Sligar)"
+    XSIZE: 1024
+    YSIZE: 1024
