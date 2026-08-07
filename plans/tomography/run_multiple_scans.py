@@ -98,10 +98,18 @@ def run_multiple_scans(
     else:
         if num_scans is None or num_scans < 2:
             raise ValueError("time mode needs num_scans > 1 (or pass scan_motor)")
-        if sleep_time == 0.0:
-            raise ValueError("time mode needs a nonzero sleep_time")
+        if sleep_time <= 0.0:
+            raise ValueError(
+                f"time mode needs a strictly positive sleep_time, got {sleep_time}"
+            )
         positions = None
         n_iterations = num_scans
+
+    if dark_flat_every < -1:
+        raise ValueError(
+            f"dark_flat_every must be -1 (initial only), 0 (never) or N > 0 "
+            f"(every N scans), got {dark_flat_every}"
+        )
 
     base = output_base_dir.rstrip("/")
 
@@ -156,9 +164,9 @@ def run_multiple_scans(
 
         yield from scan_plan(f"{base}/scan_{i + 1:05d}", i + 1)
 
-        if not motor_mode and sleep_time > 0 and i < n_iterations - 1:
+        if not motor_mode and i < n_iterations - 1:
             print(f"Pausing {sleep_time} s before the next scan...")
-            yield from bps.sleep(abs(sleep_time))
+            yield from bps.sleep(sleep_time)
 
         if dark_flat_every > 0 and (i + 1) % dark_flat_every == 0:
             print(f"Dark/flat after scan {i + 1}...")

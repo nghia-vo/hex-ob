@@ -112,7 +112,12 @@ def run_multiple_2d_scans(
     n_dark_flat = 0
     for row, pos2 in enumerate(positions2):
         print(f"\nRow {row + 1}/{num_points2}: moving {motor2.name} to {pos2:g}")
-        yield from bps.mv(motor2, float(pos2))
+        # Move BOTH motors to the row's starting point before the row's
+        # dark/flat — otherwise motor1 sits at the previous row's last
+        # column while flats are taken. (The pyepics original had that
+        # quirk; the profile's beamline-run tomo_grid_scan already moved
+        # motor1 first, and we follow it.)
+        yield from bps.mv(motor2, float(pos2), motor1, float(positions1[0]))
 
         n_dark_flat += 1
         print(f"Dark/flat for row {row + 1}...")
