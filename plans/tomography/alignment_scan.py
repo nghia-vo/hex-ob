@@ -6,22 +6,36 @@ Equivalent of the old pyepics script:
 
 What this plan does
 -------------------
-1.  Opens the photon shutter (checks front-end is open first).
+1.  Opens the photon shutter.  (The old script's front-end status check is NOT
+    ported yet — it arrives with the shared beam-check helpers from
+    lib_device_control; until then the operator confirms the front end.)
 2.  Moves the rotation stage to each angle in linspace(start, stop, num_projections).
-3.  Takes one image at every angle with the Kinetix camera (free-run, Single mode).
-4.  Optionally takes a flat-field image: moves sample_x by *flat_x_offset*, acquires
-    *num_flats* frames, then moves sample back.
+3.  Takes one image at every angle with the Kinetix camera (free-run, internal
+    trigger — exposure configured through the detector's ``prepare``).
+4.  Optionally takes flat-field images: moves sample_x by *flat_x_offset*,
+    acquires *num_flats* frames into a separate "flat" event stream, then
+    moves the sample back.
 5.  Closes the photon shutter when finished (unless *keep_shutter_open* is True).
-6.  Restores the rotation stage to its original angle.
+6.  Restores the rotation stage to its original angle and velocity.
+
+Everything from shutter-open onward runs under a finalizer, so an error or
+interrupt at any point still closes the shutter and restores the stage.
 
 Output path
 -----------
 The old script built the output folder as:
     /nsls2/data/hex/proposals/{cycle}/{proposal}/tomography/{base_folder}/scan_NNNNN/
 
-In this plan the scientist passes ``output_dir`` — the exact folder where the HDF
-file should land.  A ``StaticPathProvider`` wraps that directory so the detector
-writes its file there.  This gives the same explicit control as the old script.
+In this plan the scientist passes ``output_dir`` — the exact folder where the
+HDF file should land.  The detector must have been built with
+``lib.detectors.make_kinetix`` (or otherwise carry a settable
+``detector.path_provider``); the plan points that provider at ``output_dir``
+before staging.
+
+Unlike the old script (one file per frame, flats in a ``flat/``
+sub-directory), ophyd-async writes **one HDF file per scan**: projections and
+flats land in the same file, distinguished by Bluesky event stream —
+``primary`` for projections, ``flat`` for flat fields.
 
 Usage (inside a Bluesky RunEngine session)
 ------------------------------------------
@@ -51,7 +65,7 @@ from pathlib import Path
 import bluesky.plan_stubs as bps
 import bluesky.preprocessors as bpp
 import numpy as np
-from ophyd_async.core import StaticFilenameProvider, StaticPathProvider
+from ophyd_async.core import TriggerInfo
 
 
 # ---------------------------------------------------------------------------
@@ -103,14 +117,16 @@ def alignment_scan(
     Parameters
     ----------
     detector : HEXKinetixDetector
-        The Kinetix detector instance to use (e.g. kinetix1 or kinetix3).
+        The Kinetix detector instance to use (e.g. kinetix1 or kinetix3),
+        built by ``lib.detectors.make_kinetix`` so its output directory can
+        be set per scan.
     rot_stage : Motor
         The tomography rotation stage motor.
     sample_x : Motor
         The sample X-axis motor (used to move sample out for flat-field).
-    ph_open_cmd : EpicsSignal
+    ph_open_cmd : signal
         Signal to open the photon shutter (write 1 to open).
-    ph_close_cmd : EpicsSignal
+    ph_close_cmd : signal
         Signal to close the photon shutter (write 1 to close).
     output_dir : str
         Full path to the directory where the detector HDF file will be saved.
@@ -143,11 +159,17 @@ def alignment_scan(
     # This mirrors the old:  camera.set_hdf_file_path(output_folder, "proj")
     # ------------------------------------------------------------------
     output_path = Path(output_dir)
-    path_provider = StaticPathProvider(
-        filename_provider=StaticFilenameProvider("proj"),
-        path=output_path,
-    )
-    detector.set_path_provider(path_provider)
+    path_provider = getattr(detector, "path_provider", None)
+    if path_provider is None or not hasattr(path_provider, "set"):
+        # This branch handles misconfigured detector objects, which may not
+        # have .name either — don't let the error message itself raise.
+        detector_label = getattr(detector, "name", type(detector).__name__)
+        raise TypeError(
+            f"{detector_label} has no settable path provider; build it with "
+            "lib.detectors.make_kinetix so alignment_scan can direct its "
+            "output to output_dir."
+        )
+    path_provider.set(output_path, "proj")
 
     # ------------------------------------------------------------------
     # Build run metadata
@@ -171,20 +193,10 @@ def alignment_scan(
     angles = np.linspace(start_angle, stop_angle, num_projections)
 
     # ------------------------------------------------------------------
-    # Remember initial positions so we can restore them at the end
+    # Remember initial state so we can restore it at the end
     # ------------------------------------------------------------------
     init_angle = yield from bps.rd(rot_stage)
-
-    # ------------------------------------------------------------------
-    # Open photon shutter
-    # ------------------------------------------------------------------
-    yield from _open_photon_shutter(ph_open_cmd)
-
-    # ------------------------------------------------------------------
-    # Move rotation stage to start angle at scan velocity
-    # ------------------------------------------------------------------
-    yield from bps.mv(rot_stage.velocity, scan_velocity)
-    yield from bps.mv(rot_stage, start_angle)
+    init_velocity = yield from bps.rd(rot_stage.velocity)
 
     # ------------------------------------------------------------------
     # Run: stage detector, open a Bluesky run, acquire projections
@@ -192,14 +204,14 @@ def alignment_scan(
     @bpp.stage_decorator([detector])
     @bpp.run_decorator(md=_md)
     def _inner_scan():
-        # Configure camera: Single image mode, Internal (free-run) trigger.
-        # Equivalent to old: camera.set_image_mode(0), camera.set_trigger_mode(0)
-        yield from bps.mv(
-            detector.driver.acquire_time,   exposure_time,
-            detector.driver.acquire_period, exposure_time + 0.002,
-            detector.driver.image_mode,     "Single",
-            detector.driver.trigger_mode,   "Internal",
-            detector.driver.num_images,     1,
+        # One exposure per trigger, internal (free-run) trigger mode.
+        # prepare() hands the exposure to the detector's trigger logic, which
+        # sets acquire_time / acquire_period / image mode / num_images itself
+        # (the 0.19 replacement for poking driver signals one by one).
+        yield from bps.prepare(
+            detector,
+            TriggerInfo(livetime=exposure_time, deadtime=0.002),
+            wait=True,
         )
 
         print("\n" + "=" * 52)
@@ -218,23 +230,15 @@ def alignment_scan(
             yield from bps.trigger_and_read([detector, rot_stage])
 
         # ---------------------------------------------------------------
-        # Optional: flat-field images
-        # Equivalent to old: deco.move_relative_sample_stage_x(offset) +
-        #                    take_flat_images(1, ...)
+        # Optional: flat-field images -> separate "flat" event stream in
+        # the same HDF file (ophyd-async writes one file per scan; the old
+        # per-frame files + flat/ sub-directory no longer apply).
         # ---------------------------------------------------------------
         if abs(flat_x_offset) >= 0.5:
-            # Point the detector to the flat sub-directory
-            flat_path_provider = StaticPathProvider(
-                filename_provider=StaticFilenameProvider("flat"),
-                path=output_path / "flat",
-            )
-            detector.set_path_provider(flat_path_provider)
-
             print("\n" + "-" * 52)
             print("  Moving sample out for flat-field images...")
             yield from bps.mvr(sample_x, flat_x_offset)
 
-            yield from bps.mv(detector.driver.num_images, num_flats)
             print(f"  Acquiring {num_flats} flat image(s)")
             for _ in range(num_flats):
                 yield from bps.trigger_and_read([detector], name="flat")
@@ -244,13 +248,29 @@ def alignment_scan(
             print("-" * 52)
 
     # ---------------------------------------------------------------
+    # Body under the finalizer: everything from shutter-open onward, so
+    # an error/interrupt at ANY point after the shutter opens (including
+    # the initial positioning) still runs _cleanup.
+    # ---------------------------------------------------------------
+    def _body():
+        yield from _open_photon_shutter(ph_open_cmd)
+
+        # Move rotation stage to start angle at scan velocity
+        yield from bps.mv(rot_stage.velocity, scan_velocity)
+        yield from bps.mv(rot_stage, start_angle)
+
+        yield from _inner_scan()
+
+    # ---------------------------------------------------------------
     # Cleanup: always runs even on interrupt or error
     # ---------------------------------------------------------------
     def _cleanup():
         if not keep_shutter_open:
             yield from _close_photon_shutter(ph_close_cmd)
-        # Restore rotation stage to its original angle
+        # Restore rotation stage to its original angle and velocity
         yield from bps.mv(rot_stage, init_angle)
-        print(f"  Rotation stage restored to {init_angle:.3f} deg")
+        yield from bps.mv(rot_stage.velocity, init_velocity)
+        print(f"  Rotation stage restored to {init_angle:.3f} deg "
+              f"(velocity {init_velocity:g})")
 
-    return (yield from bpp.finalize_wrapper(_inner_scan(), _cleanup()))
+    return (yield from bpp.finalize_wrapper(_body(), _cleanup()))
