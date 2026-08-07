@@ -1,0 +1,11 @@
+# bluesky Kafka publisher config for the simulated HEX beamline.
+# nslsii.configure_kafka_publisher() reads /etc/bluesky/kafka.yml, so this file
+# must be copied there (needs sudo) before booting the profile:
+#     sudo mkdir -p /etc/bluesky && sudo cp configs/kafka.yml /etc/bluesky/kafka.yml
+# Points at the local single-node Kafka broker from docker-compose.
+---
+abort_run_on_kafka_exception: false
+bootstrap_servers:
+  - 127.0.0.1:9092
+runengine_producer_config:
+  security.protocol: PLAINTEXT

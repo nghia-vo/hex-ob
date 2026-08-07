@@ -1,0 +1,74 @@
+# Builds a realistic simulated PandA that actually TICKS: the PandABlocks-server
+# `sim_server` (control protocol on :8888, data on :8889) driven by the
+# PandABlocks-FPGA cycle-accurate **block-simulation engine** instead of the
+# server's bundled register echo. The companion `pandablocks-ioc`
+# (docker-compose.panda.yml) turns that into EPICS CA + PVA/PVI for `HDFPanda`.
+#
+# Why the engine matters (Option C)
+# ---------------------------------
+# The server's bundled `python/sim_server` is "as dumb as a brick" -- it answers
+# the register protocol but runs no block logic, so CLOCK/PCOMP/PULSE/PCAP never
+# tick and PCAP:ACTIVE never latches on ARM. An ophyd-async fly scan (arm ->
+# wait pcap.active -> capture) therefore stalls. PandABlocks-FPGA ships a real
+# block-sim engine (common/python/simulations.py + per-block *_sim.py) that
+# advances FPGA cycles and performs PCAP capture. We front that engine with a
+# Python-3 socket wrapper (fpga_sim_server.py) and select it via `simserver -f`.
+#
+# Using the real `pandabox-no-fmc` app config (not the server's bundled minimal
+# *test* config) avoids the test-config artifacts (undescribed INTERVAL block,
+# bogus `*METADATA.LABEL_BLAH1`, zero-length tables) that break ioc introspection.
+
+# ---- Stage 1: clone PandABlocks-FPGA and generate the app config (pure Python) ----
+FROM python:3.11-slim AS fpga-config
+ARG PANDA_FPGA_REF=main
+ARG PANDA_APP=pandabox-no-fmc
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN pip install --no-cache-dir uv
+WORKDIR /fpga
+RUN git clone --depth 1 --branch "${PANDA_FPGA_REF}" \
+        https://github.com/PandABlocks/PandABlocks-FPGA.git .
+# `common.python.generate_app <out> <app.ini>` autogenerates config_d + the
+# autogen sim_server (no Vivado; that is only needed for HDL/bitstream targets).
+# We keep /out/config_d for the C server and the /fpga source tree (common/ +
+# modules/) for the block-sim engine our wrapper imports at runtime.
+RUN uv run --with jinja2 --with numpy --with matplotlib \
+        python -m common.python.generate_app /out "apps/${PANDA_APP}.app.ini"
+# Drop the git metadata to keep the runtime copy lean.
+RUN rm -rf /fpga/.git
+
+# ---- Stage 2: build the C sim_server and run it against the FPGA sim engine ----
+FROM python:3.11-slim
+# Pinned server release (mirrors the upstream headless build in
+# PandABlocks-server .github/workflows/_test.yml; sim_server is the one natively
+# buildable target — no cross-compiler / kernel needed).
+ARG PANDA_SERVER_REF=4.1
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git build-essential ca-certificates netcat-openbsd \
+    && rm -rf /var/lib/apt/lists/*
+# numpy is required at runtime by the FPGA block-sim engine; uv drives the build.
+RUN pip install --no-cache-dir uv numpy
+WORKDIR /src
+RUN git clone --depth 1 --branch "${PANDA_SERVER_REF}" \
+        https://github.com/PandABlocks/PandABlocks-server.git .
+RUN ln -s CONFIG.example CONFIG \
+    && uv run --locked make BUILD_DIR=/build sim_server
+
+# PandABlocks-FPGA source tree (block-sim engine + per-block models + block.ini).
+# Our wrapper imports common.python.simulations and modules/*/*_sim.py from here.
+COPY --from=fpga-config /fpga /fpga
+ENV PANDA_FPGA_ROOT=/fpga
+
+# `simserver -f <dir>` expects <dir>/autogen/sim_server and <dir>/autogen/config_d.
+# sim_server = our Python-3 engine wrapper; config_d = the generated app config.
+# We also keep the original generated (Python-2) autogen sim_server as
+# `sim_server.orig`: our wrapper parses its create_block() list so the simulated
+# block set always matches config_d regardless of the FPGA revision.
+COPY --from=fpga-config /out/config_d /panda/autogen/config_d
+COPY --from=fpga-config /out/sim_server /panda/autogen/sim_server.orig
+COPY fpga_sim_server.py /panda/autogen/sim_server
+RUN chmod +x /panda/autogen/sim_server
+
+EXPOSE 8888 8889
+# -n = no valgrind; -f = use our engine-backed sim_server + generated config_d.
+CMD ["./simserver", "-n", "-f", "/panda"]

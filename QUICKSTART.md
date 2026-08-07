@@ -2,7 +2,7 @@
 
 For anyone (Nghia, future-AJ, …) who wants to run the simulated HEX beamline
 and develop hextools / hex-profile-collection against it. Deep detail lives in
-[`hxm_program/simulated_beamlines/HEX/PROGRESS.md`](https://github.com/NSLS2/hxm_program/blob/main/simulated_beamlines/HEX/PROGRESS.md);
+[`hex-simulated-beamline/PROGRESS.md`](hex-simulated-beamline/PROGRESS.md);
 this page is the 5-minute version.
 
 ## 0. What you get
@@ -24,7 +24,7 @@ beamline hosts and real proposal storage are unreachable.
 ## 1. Bring up the whole sim (one command)
 
 ```bash
-cd ~/git_projects/hxm_program/simulated_beamlines/HEX
+cd ~/git_projects/hex-ob/hex-simulated-beamline
 ./scripts/up_all.sh          # idempotent; auto-creates a helper venv on first run
 source scripts/env.sh        # loopback-only EPICS client env (4 CA ports)
 ```
@@ -39,7 +39,7 @@ Smoke test (should PASS): `.toolenv/bin/python iocs/panda/tests/slowmove_capture
 
 ```bash
 cd <your hex-profile-collection>     # branch hxm-1288-sim-boot (HEX_SIM gate)
-source ~/git_projects/hxm_program/simulated_beamlines/HEX/scripts/env.sh
+source ~/git_projects/hex-ob/hex-simulated-beamline/scripts/env.sh
 export HEX_SIM=1 MPLBACKEND=Agg
 pixi run -e terminal ipython -- --profile-dir=.     # → BOOT COMPLETE
 ```
@@ -52,7 +52,7 @@ ophyd-async device may report it unavailable — expected).
 ## 3. Run the pyepics oracle (the "before" reference)
 
 ```bash
-cd ~/git_projects/hxm_program/simulated_beamlines/HEX
+cd ~/git_projects/hex-ob/hex-simulated-beamline
 docker build -t hexsim-oracle:local oracle/     # once
 docker run --rm --network host \
   -v ~/git_projects/hex-acq-pyepics:/hex-acq-pyepics:ro \
