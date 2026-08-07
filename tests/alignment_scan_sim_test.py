@@ -3,8 +3,9 @@ Functional test: alignment_scan against the simulated HEX beamline.
 
 Runs the real plan with the real devices from lib/ against
 hxm_program/simulated_beamlines/HEX (Kinetix-Det:1 = real AreaDetector IOC
-with the Kinetix personality; rotation stage = sim motor IOC; sample_x and
-the shutter command PVs are fabricated by the blackhole IOC), then asserts:
+with the Kinetix personality; rotation stage and sample_x = caproto
+FakeMotor records on the sim motor IOC; the shutter command PVs are
+fabricated by the blackhole IOC), then asserts:
 
   - the run completed (stop doc, exit_status success);
   - one 'primary' event per projection angle, num_flats 'flat' events;
