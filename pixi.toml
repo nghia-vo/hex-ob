@@ -22,4 +22,4 @@ numpy = "*"
 pytest = "*"
 
 [tasks]
-test-mock = "python tests/alignment_scan_mock_test.py"
+test-mock = "python tests/run_mock_tests.py"

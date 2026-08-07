@@ -60,33 +60,13 @@ Usage (inside a Bluesky RunEngine session)
     ))
 """
 
-from pathlib import Path
-
 import bluesky.plan_stubs as bps
 import bluesky.preprocessors as bpp
 import numpy as np
 from ophyd_async.core import TriggerInfo
 
-
-# ---------------------------------------------------------------------------
-# Shutter helpers
-# (Mirrors open_ph_shutter / close_ph_shutter from 03-motors.py reference)
-# ---------------------------------------------------------------------------
-
-def _open_photon_shutter(ph_open_cmd, sleep_time: float = 3.0):
-    """Open the photon shutter and wait for it to settle."""
-    print("Opening photon shutter...")
-    yield from bps.abs_set(ph_open_cmd, 1, wait=True)
-    yield from bps.sleep(sleep_time)
-    print("Photon shutter open.")
-
-
-def _close_photon_shutter(ph_close_cmd, sleep_time: float = 3.0):
-    """Close the photon shutter and wait for it to settle."""
-    print("Closing photon shutter...")
-    yield from bps.abs_set(ph_close_cmd, 1, wait=True)
-    yield from bps.sleep(sleep_time)
-    print("Photon shutter closed.")
+from lib.detectors import set_output_dir
+from lib.shutter import close_photon_shutter, open_photon_shutter
 
 
 # ---------------------------------------------------------------------------
@@ -158,18 +138,7 @@ def alignment_scan(
     # Point the detector's path provider at the requested output directory.
     # This mirrors the old:  camera.set_hdf_file_path(output_folder, "proj")
     # ------------------------------------------------------------------
-    output_path = Path(output_dir)
-    path_provider = getattr(detector, "path_provider", None)
-    if path_provider is None or not hasattr(path_provider, "set"):
-        # This branch handles misconfigured detector objects, which may not
-        # have .name either — don't let the error message itself raise.
-        detector_label = getattr(detector, "name", type(detector).__name__)
-        raise TypeError(
-            f"{detector_label} has no settable path provider; build it with "
-            "lib.detectors.make_kinetix so alignment_scan can direct its "
-            "output to output_dir."
-        )
-    path_provider.set(output_path, "proj")
+    output_path = set_output_dir(detector, output_dir, "proj")
 
     # ------------------------------------------------------------------
     # Build run metadata
@@ -253,7 +222,7 @@ def alignment_scan(
     # the initial positioning) still runs _cleanup.
     # ---------------------------------------------------------------
     def _body():
-        yield from _open_photon_shutter(ph_open_cmd)
+        yield from open_photon_shutter(ph_open_cmd)
 
         # Move rotation stage to start angle at scan velocity
         yield from bps.mv(rot_stage.velocity, scan_velocity)
@@ -266,7 +235,7 @@ def alignment_scan(
     # ---------------------------------------------------------------
     def _cleanup():
         if not keep_shutter_open:
-            yield from _close_photon_shutter(ph_close_cmd)
+            yield from close_photon_shutter(ph_close_cmd)
         # Restore rotation stage to its original angle and velocity
         yield from bps.mv(rot_stage, init_angle)
         yield from bps.mv(rot_stage.velocity, init_velocity)
