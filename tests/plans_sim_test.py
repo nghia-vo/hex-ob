@@ -49,20 +49,24 @@ from lib.motors import rot_stage, sample_x
 from plans.tomography import scan_1d, take_dark_flat, take_radiograph
 
 BASE = "/nsls2/data/hex/proposals/2026-2/pass-000000/tomography"
-HOST_BASE = Path("/tmp/hex-sim-data") / BASE.lstrip("/")
 
 
-def check_hdf(host_dir: Path, since: float, expected_frames: int, label: str):
+def host_dir(output_dir: str) -> Path:
+    """The host-side view of an in-sim /nsls2 output directory."""
+    return Path("/tmp/hex-sim-data") / output_dir.lstrip("/")
+
+
+def check_hdf(directory: Path, since: float, expected_frames: int, label: str):
     hdf_files = sorted(
         (
             p
             for pattern in ("*.h5", "*.hdf", "*.hdf5")
-            for p in host_dir.glob(pattern)
+            for p in directory.glob(pattern)
             if p.stat().st_mtime >= since - 1
         ),
         key=lambda p: p.stat().st_mtime,
     )
-    assert hdf_files, f"{label}: no HDF file written under {host_dir}"
+    assert hdf_files, f"{label}: no HDF file written under {directory}"
     try:
         import h5py
 
@@ -104,7 +108,7 @@ def main() -> None:
     ))
     stop_ok()
     assert events() == {"primary": 3}, events()
-    check_hdf(Path("/tmp/hex-sim-data") / out.lstrip("/"), t0, 3, "take_radiograph")
+    check_hdf(host_dir(out), t0, 3, "take_radiograph")
 
     # -- scan_1d ------------------------------------------------------------
     docs.clear()
@@ -117,7 +121,7 @@ def main() -> None:
     ))
     stop_ok()
     assert events() == {"primary": 4}, events()
-    check_hdf(Path("/tmp/hex-sim-data") / out.lstrip("/"), t0, 4, "scan_1d")
+    check_hdf(host_dir(out), t0, 4, "scan_1d")
 
     # -- take_dark_flat -----------------------------------------------------
     docs.clear()
@@ -130,7 +134,7 @@ def main() -> None:
     ))
     stop_ok()
     assert events() == {"dark": 2, "flat": 3}, events()
-    check_hdf(Path("/tmp/hex-sim-data") / out.lstrip("/"), t0, 5, "take_dark_flat")
+    check_hdf(host_dir(out), t0, 5, "take_dark_flat")
 
     print("\nALL PASS")
 

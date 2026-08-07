@@ -14,7 +14,10 @@ TESTS_DIR = Path(__file__).resolve().parent
 
 def main() -> None:
     tests = sorted(TESTS_DIR.glob("*_mock_test.py"))
-    assert tests, "no *_mock_test.py files found"
+    if not tests:
+        # Not an assert: with `python -O` asserts vanish and an empty test
+        # set would report success.
+        sys.exit("FAILED: no *_mock_test.py files found")
     failures = []
     for test in tests:
         print(f"\n=== {test.name} ===")

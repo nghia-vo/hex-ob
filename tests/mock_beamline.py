@@ -90,7 +90,11 @@ class MockBeamline:
         self.RE.subscribe(lambda name, doc: self.docs.append((name, doc)))
 
     def reset(self):
-        """Clear captured documents between plans (frame counter keeps going)."""
+        """Clear captured documents between plans.
+
+        The frame counter is NOT touched here — it resets when the next plan
+        starts a new HDF capture (mirroring the real plugin's NumCaptured).
+        """
         self.docs.clear()
 
     def events_by_stream(self) -> dict[str, int]:

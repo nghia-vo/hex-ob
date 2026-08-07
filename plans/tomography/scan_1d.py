@@ -81,6 +81,8 @@ def scan_1d(
     md : dict, optional
         Extra run metadata.
     """
+    if num_points < 1:
+        raise ValueError(f"num_points must be >= 1, got {num_points}")
     if start == stop:
         positions = np.full(num_points, start)
     else:
