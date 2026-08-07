@@ -20,6 +20,8 @@ from mock_beamline import MockBeamline
 
 from plans.tomography import (
     alignment_scan,
+    enable_flat_correction,
+    reset_detector,
     run_multiple_2d_scans,
     run_multiple_scans,
     scan_1d,
@@ -237,6 +239,35 @@ def main() -> None:
     else:
         raise AssertionError("frames_to_average=1 should raise")
     print("PASS  tomo_flyscan_average (structural; validation raises)")
+
+    # -- reset_detector (full mock run) -------------------------------------
+    set_mock_value(bl.detector.hdf.nd_array_port, "PROC1")   # pretend broken
+    set_mock_value(bl.detector.pva.nd_array_port, "PROC1")
+    bl.RE(reset_detector(bl.detector, panda=bl.panda, rot_stage=bl.rot_stage))
+    assert asyncio.run(bl.detector.hdf.nd_array_port.get_value()) == "TRANS1"
+    assert asyncio.run(bl.detector.pva.nd_array_port.get_value()) == "TRANS1"
+    assert asyncio.run(bl.detector.proc.enable_filter.get_value()) == "Disable"
+    assert asyncio.run(bl.rot_stage.velocity.get_value()) == 30.0
+    print("PASS  reset_detector (ports to default, filter off, velocity reset)")
+
+    # -- enable_flat_correction (full mock run, enable then disable) --------
+    set_mock_value(bl.detector.pva.nd_array_port, "KINETIX1")
+    set_mock_value(bl.detector.proc.port_name, "PROC1")
+    set_mock_value(bl.detector.proc.valid_flat_field, "Valid")
+    bl.RE(enable_flat_correction(
+        bl.detector, bl.sample_x, bl.ph_open_cmd, bl.ph_close_cmd,
+        exposure_time=0.01, flat_x_offset=2.0, enable=True, settle_time=0.01,
+    ))
+    assert asyncio.run(bl.detector.pva.nd_array_port.get_value()) == "PROC1"
+    assert asyncio.run(bl.detector.proc.enable_flat_field.get_value()) == "Enable"
+    assert asyncio.run(bl.sample_x.user_readback.get_value()) == 0.0  # restored
+    bl.RE(enable_flat_correction(
+        bl.detector, bl.sample_x, bl.ph_open_cmd, bl.ph_close_cmd,
+        exposure_time=0.01, flat_x_offset=2.0, enable=False,
+    ))
+    assert asyncio.run(bl.detector.pva.nd_array_port.get_value()) == "TRANS1"
+    assert asyncio.run(bl.detector.proc.enable_flat_field.get_value()) == "Disable"
+    print("PASS  enable_flat_correction (enable wires PVA->PROC1 + captures; disable restores)")
 
     print("\nALL PASS")
 

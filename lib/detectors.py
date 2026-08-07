@@ -39,7 +39,7 @@ from ophyd_async.core import (
 )
 from typing import Annotated as A
 
-from ophyd_async.core import SignalRW
+from ophyd_async.core import SignalR, SignalRW
 from ophyd_async.epics.adcore import (
     ADHDFDataLogic,
     ADImageMode,
@@ -122,6 +122,10 @@ class HEXProcPluginIO(NDPluginBaseIO):
     reset_filter: A[SignalRW[str], PvSuffix("ResetFilter")]
     auto_reset_filter: A[SignalRW[str], PvSuffix.rbv("AutoResetFilter")]
     filter_callbacks: A[SignalRW[str], PvSuffix.rbv("FilterCallbacks")]
+    # Flat-field correction (live-view normalization mode):
+    save_flat_field: A[SignalRW[str], PvSuffix("SaveFlatField")]        # No/Yes
+    enable_flat_field: A[SignalRW[str], PvSuffix.rbv("EnableFlatField")]  # Disable/Enable
+    valid_flat_field: A[SignalR[str], PvSuffix("ValidFlatField_RBV")]   # Invalid/Valid
 
 
 class HEXADHDFDataLogic(ADHDFDataLogic):
@@ -163,16 +167,17 @@ class HEXKinetixDetector(KinetixDetector):
         await stop_busy_record(self.driver.acquire, timeout=10)
         await super().stage()
 
-    @AsyncStatus.wrap
-    async def unstage(self) -> None:
-        # Close the writer and disarm via the standard path first.
-        await super().unstage()
+    async def start_live_view(self) -> None:
+        """Start Continuous/Internal free-run WITHOUT waiting for completion.
 
-        # Return to continuous free-run mode for live viewing.  Acquire is a
-        # busy record and continuous mode never "finishes", so start it with
-        # the same non-blocking idiom ADAcquireLogic.start_acquiring uses:
-        # dispatch the put, hold on to its status, and only wait until the
-        # readback shows the camera acquiring.
+        Acquire is a busy record and continuous mode never "finishes" — a
+        plain set()/abs_set leaves a completion-tracked status that times
+        out.  Uses the ADAcquireLogic non-blocking idiom; plans call this
+        via ``bps.wait_for([detector.start_live_view])`` — wait_for takes
+        awaitable factories (callables returning a coroutine), so the bound
+        method is passed UNCALLED and the RunEngine creates/awaits the
+        coroutine in its own loop.
+        """
         await self.driver.trigger_mode.set(KinetixTriggerMode.INTERNAL)
         await self.driver.image_mode.set(ADImageMode.CONTINUOUS)
         self._live_view_status = await set_and_wait_for_other_value(
@@ -182,6 +187,14 @@ class HEXKinetixDetector(KinetixDetector):
             match_value=True,
             wait_for_set_completion=False,
         )
+
+    @AsyncStatus.wrap
+    async def unstage(self) -> None:
+        # Close the writer and disarm via the standard path first.
+        await super().unstage()
+
+        # Return to continuous free-run mode for live viewing.
+        await self.start_live_view()
 
 
 def make_kinetix(
@@ -223,9 +236,15 @@ def make_kinetix(
                 datakey_suffix="",
             ),
         ),
-        plugins={"proc": HEXProcPluginIO(prefix + "Proc1:")},
+        plugins={
+            "proc": HEXProcPluginIO(prefix + "Proc1:"),
+            "pva": NDPluginBaseIO(prefix + "Pva1:"),
+        },
         name=f"kinetix{detector_id}",
     )
+    # The legacy default upstream for the file/view plugins: Det:1 routes
+    # through the transform plugin, Det:3 straight off the camera.
+    detector.default_source_port = "TRANS1" if detector_id == 1 else "KTX1"
     # Not an ophyd-async child device — just a handle so plans can retarget
     # the output directory (see SettablePathProvider above).
     detector.path_provider = path_provider

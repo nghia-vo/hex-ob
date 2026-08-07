@@ -13,9 +13,13 @@ run_multiple_scans    : batch runner (motor series or time series + dark/flats)
 run_multiple_2d_scans : grid batch runner (two motors, dark/flat per row)
 tomo_flyscan_average / run_multiple_scans_average / run_multiple_2d_scans_average :
     frame-averaged variants (Proc-plugin recursive filter)
+reset_detector          : recovery — detector/PandA/stage back to defaults
+enable_flat_correction  : live-view flat-field correction mode
 """
 
 from .alignment_scan import alignment_scan
+from .enable_flat_correction import enable_flat_correction
+from .reset_detector import reset_detector
 from .run_multiple_2d_scans import run_multiple_2d_scans
 from .run_multiple_2d_scans_average import run_multiple_2d_scans_average
 from .run_multiple_scans import run_multiple_scans
@@ -37,4 +41,6 @@ __all__ = [
     "tomo_flyscan_average",
     "run_multiple_scans_average",
     "run_multiple_2d_scans_average",
+    "reset_detector",
+    "enable_flat_correction",
 ]
