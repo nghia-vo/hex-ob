@@ -12,7 +12,9 @@ The functional run (frames actually captured, HDF file written, event
 streams) happens against the simulated HEX beamline —
 see tests/alignment_scan_sim_test.py.
 
-Run from the hex-ob root:
+Run from the hex-ob root (same path CI uses):
+    pixi run test-mock
+Or, from the profile env:
     cd hex-profile-collection && \
     PYTHONPATH=.. pixi run -e terminal python ../tests/alignment_scan_mock_test.py
 """

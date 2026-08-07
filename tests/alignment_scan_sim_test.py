@@ -39,7 +39,7 @@ addrs = addr_list.split()
 if not addrs or any(not a.startswith("127.0.0.1") for a in addrs):
     sys.exit(
         f"REFUSING to run: EPICS_CA_ADDR_LIST={addr_list!r} is not loopback-only.\n"
-        "Source simulated_beamlines/HEX/scripts/env.sh first."
+        "Source hex-simulated-beamline/scripts/env.sh first."
     )
 os.environ.setdefault("EPICS_CA_AUTO_ADDR_LIST", "NO")
 
