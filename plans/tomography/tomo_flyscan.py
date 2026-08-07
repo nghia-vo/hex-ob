@@ -124,6 +124,14 @@ def tomo_flyscan(
         detectors = [detectors]
     detectors = list(detectors)
 
+    if not detectors:
+        raise ValueError("detectors must contain at least one detector")
+    if stop_deg <= start_deg:
+        raise ValueError(
+            f"stop_deg ({stop_deg}) must be > start_deg ({start_deg}) — "
+            "reverse scans are not supported (the sweep-wait logic assumes "
+            "a forward scan)."
+        )
     if num_projections < 2:
         raise ValueError(f"num_projections must be >= 2, got {num_projections}")
     if exposure_time <= 0:
@@ -172,6 +180,10 @@ def tomo_flyscan(
 
     panda_pcomp = panda.pcomp[1]
     panda_pulser = panda.pulse[1]
+
+    # Tracks whether devices are currently staged, so the finalizer can
+    # unstage on error/interrupt without double-unstaging the happy path.
+    staged: dict = {"devices": None}
 
     def _scan():
         nonlocal step_time
@@ -240,6 +252,7 @@ def tomo_flyscan(
                 yield from bps.mv(det.hdf.queue_size, num_projections * 2)
 
         yield from bps.stage_all(*all_devices)
+        staged["devices"] = all_devices
         for det in detectors:
             yield from bps.prepare(det, det_trigger_info, wait=True)
         yield from bps.prepare(panda, panda_trigger_info, wait=True)
@@ -247,8 +260,9 @@ def tomo_flyscan(
         yield from bps.declare_stream(*all_devices, name="tomo")
         yield from bps.kickoff_all(*all_devices, wait=True)
 
-        # Sweep. The set() status is held while we collect.
-        movement_status = rot_stage.set(stop_deg + lead_angle, wait=False)
+        # Sweep — non-blocking group move so the RunEngine keeps handling
+        # messages (pause/abort) while we collect.
+        yield from bps.abs_set(rot_stage, stop_deg + lead_angle, group="tomo_sweep")
 
         current_pos = yield from bps.rd(rot_stage)
         while current_pos < start_deg:
@@ -262,8 +276,10 @@ def tomo_flyscan(
             stream_name="tomo",
         )
         yield from bps.unstage_all(*all_devices)
+        staged["devices"] = None
 
-        movement_status.wait()
+        # Make sure the sweep move is done before closing out.
+        yield from bps.wait(group="tomo_sweep")
         yield from bps.close_run()
 
         # Report captured counts (parity with the profile plan).
@@ -275,6 +291,11 @@ def tomo_flyscan(
             print(f"    {name:15}: {count}")
 
     def _cleanup():
+        # Unstage anything still staged (error/interrupt path) — disarms
+        # the detectors/PandA and restores the Kinetix live view.
+        if staged["devices"] is not None:
+            yield from bps.unstage_all(*staged["devices"])
+            staged["devices"] = None
         if use_shutter and ph_close_cmd is not None:
             yield from close_photon_shutter(ph_close_cmd)
         yield from bps.mv(rot_stage.velocity, reset_speed)
