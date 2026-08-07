@@ -35,6 +35,7 @@ from ophyd_async.core import (
     PathInfo,
     StreamableDataProvider,
     set_and_wait_for_other_value,
+    wait_for_value,
 )
 from ophyd_async.epics.adcore import (
     ADHDFDataLogic,
@@ -108,6 +109,12 @@ class HEXADHDFDataLogic(ADHDFDataLogic):
         await self.writer.swmr_mode.set(False)
         # Flushing via FlushNow occasionally locks the HDF plugin at HEX.
         provider.flush_signal = None
+        # The plugin resets NumCaptured when capture starts (just done by
+        # super()), but the monitor-cached readback can still hold the
+        # PREVIOUS scan's count when ophyd-async takes its baseline — which
+        # then fails kickoff with "requested N:M, but detector was only
+        # prepared up to ...".  Wait for the reset to actually propagate.
+        await wait_for_value(self.writer.num_captured, 0, timeout=10)
         return provider
 
     async def stop(self) -> None:
@@ -121,8 +128,17 @@ class HEXKinetixDetector(KinetixDetector):
     HEX-specific Kinetix detector.
 
     After every scan (or abort) the camera is reset to Continuous / Internal
-    mode and restarted so that the live-view image stream resumes.
+    mode and restarted so that the live-view image stream resumes — and,
+    symmetrically, staging STOPS the live view first (the old scripts'
+    ``stop_preview()``): a free-running camera leaks frames into the new
+    HDF capture between prepare and kickoff, which shows up as
+    "Kickoff requested N:M, but detector was only prepared up to ...".
     """
+
+    @AsyncStatus.wrap
+    async def stage(self) -> None:
+        await stop_busy_record(self.driver.acquire, timeout=10)
+        await super().stage()
 
     @AsyncStatus.wrap
     async def unstage(self) -> None:

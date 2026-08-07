@@ -375,6 +375,21 @@ rotation restored. Runner: hex-ob `tests/alignment_scan_sim_test.py`
 
 ## 🚧 Remaining / next
 
+0. **Armed-external frame gating (found 2026-08-07 porting `tomo_flyscan`):**
+   the frame tier free-runs when armed, so an ophyd-async EXTERNAL_EDGE fly
+   scan fails kickoff ("Kickoff requested N:M...") — frames leak into the
+   capture before kickoff. The pyepics oracle tolerates this (its model IS
+   free-run + separate PandA tally); the Bluesky fly path needs the sim
+   camera to hold frames until PULSE1 fires when TriggerMode is external.
+   Direction: extend the personality/bridge so armed-external pacing is
+   driven by the pulse train (per-pulse), not the sim driver's own clock.
+   Until then `tests/tomo_flyscan_sim_test.py` (hex-ob) exits with a KNOWN
+   SIM GAP message; the plan itself mirrors the beamline-proven profile
+   structure. Two REAL device-layer fixes came out of the chase (both apply
+   at the beamline too): wait for NumCaptured reset to propagate before
+   ophyd-async's baseline read, and stop the live view at stage() (the old
+   scripts' stop_preview).
+
 1. **The "after" leg**: hextools `tomo_fly` via the tutorial (M0→M6), then
    the functional-equivalence comparison against oracle outputs
    (`ver:equivalence-validation` in the design graph).
