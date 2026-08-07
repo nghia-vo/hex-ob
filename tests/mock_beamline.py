@@ -37,6 +37,8 @@ except ImportError:
     )
 
 from lib.detectors import make_kinetix
+
+__all__ = ["MockBeamline", "set_mock_value", "callback_on_mock_put"]
 from lib.panda import make_panda
 
 

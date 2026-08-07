@@ -26,6 +26,11 @@ from plans.tomography import (
     take_dark_flat,
     take_radiograph,
     tomo_flyscan,
+    tomo_flyscan_average,
+)
+from plans.tomography.tomo_flyscan_average import (
+    configure_averaging,
+    restore_averaging,
 )
 
 OUT = "/tmp/hex-ob-mock/scan_test"
@@ -189,6 +194,49 @@ def main() -> None:
     assert asyncio.run(bl.sample_x.user_readback.get_value()) == 0.0
     assert asyncio.run(bl.rot_stage.user_readback.get_value()) == 0.0
     print("PASS  run_multiple_2d_scans (grid order, dark/flat per row, restore)")
+
+    # -- averaging wiring (full mock run of configure/restore) --------------
+    from mock_beamline import set_mock_value
+
+    set_mock_value(bl.detector.hdf.nd_array_port, "KINETIX1")
+    set_mock_value(bl.detector.proc.port_name, "PROC1")
+
+    saved = {}
+
+    def _wire():
+        saved["port"] = yield from configure_averaging(bl.detector, 4)
+    bl.RE(_wire())
+    assert saved["port"] == "KINETIX1"
+    assert asyncio.run(bl.detector.proc.num_filter.get_value()) == 4
+    assert asyncio.run(bl.detector.proc.enable_filter.get_value()) == "Enable"
+    assert asyncio.run(bl.detector.proc.nd_array_port.get_value()) == "KINETIX1"
+    assert asyncio.run(bl.detector.hdf.nd_array_port.get_value()) == "PROC1"
+    bl.RE(restore_averaging(bl.detector, saved["port"]))
+    assert asyncio.run(bl.detector.proc.enable_filter.get_value()) == "Disable"
+    assert asyncio.run(bl.detector.hdf.nd_array_port.get_value()) == "KINETIX1"
+    print("PASS  averaging wiring (configure routes HDF->PROC1, restore reverts)")
+
+    # -- tomo_flyscan_average (structural + validation) ---------------------
+    msg = start_plan(tomo_flyscan_average(
+        bl.detector, bl.panda, bl.rot_stage,
+        frames_to_average=4,
+        ph_open_cmd=bl.ph_open_cmd, ph_close_cmd=bl.ph_close_cmd,
+        output_dir=OUT, exposure_time=0.015, num_projections=61,
+        start_deg=0, stop_deg=30,
+    ))
+    assert msg is not None
+    try:
+        start_plan(tomo_flyscan_average(
+            bl.detector, bl.panda, bl.rot_stage,
+            frames_to_average=1,
+            ph_open_cmd=bl.ph_open_cmd, ph_close_cmd=bl.ph_close_cmd,
+            output_dir=OUT, exposure_time=0.015, num_projections=61,
+        ))
+    except ValueError as exc:
+        assert "frames_to_average" in str(exc)
+    else:
+        raise AssertionError("frames_to_average=1 should raise")
+    print("PASS  tomo_flyscan_average (structural; validation raises)")
 
     print("\nALL PASS")
 
