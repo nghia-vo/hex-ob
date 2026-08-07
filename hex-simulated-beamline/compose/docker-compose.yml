@@ -1,0 +1,89 @@
+# Simulated HEX beamline — fake services layer (Phase 1)
+#
+# Brings up the off-beamline service dependencies a HEX bluesky session needs:
+#   Redis  (RE metadata store)   -> 127.0.0.1:6380 (TLS; plaintext 6379 disabled)
+#   MongoDB (databroker backend) -> 127.0.0.1:27017
+#   Kafka  (bluesky documents)   -> 127.0.0.1:9092
+#   Tiled  (catalog / writer)    -> 127.0.0.1:8000
+#
+# All ports bind to 127.0.0.1 only. Mirrors the NSLS2/test-beamline-profiles CI
+# workflow, adapted from GitHub-Actions steps into a local, reproducible stack.
+#
+# Usage: `../scripts/up.sh` (wrapper that waits for health + seeds) or plain
+#        `docker compose up -d --wait` from this directory.
+
+name: hexsim
+
+services:
+  redis:
+    image: redis:7
+    container_name: hexsim-redis
+    # New/secure NSLS-II redis machines use TLS on 6380 (6379 = old plaintext).
+    # `--port 0` disables the plaintext port so only 6380/TLS is served.
+    command:
+      - redis-server
+      - --port
+      - "0"
+      - --tls-port
+      - "6380"
+      - --tls-cert-file
+      - /certs/redis.crt
+      - --tls-key-file
+      - /certs/redis.key
+      - --tls-ca-cert-file
+      - /certs/redis.crt
+      - --tls-auth-clients
+      - "no"
+    ports:
+      - "127.0.0.1:6380:6380"
+    volumes:
+      - ./certs:/certs:ro
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "6380", "--tls", "--cert", "/certs/redis.crt",
+             "--key", "/certs/redis.key", "--cacert", "/certs/redis.crt", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  mongo:
+    image: mongo:4.4
+    container_name: hexsim-mongo
+    ports:
+      - "127.0.0.1:27017:27017"
+    healthcheck:
+      test: ["CMD", "mongo", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+
+  kafka:
+    image: apache/kafka:3.9.0
+    container_name: hexsim-kafka
+    ports:
+      - "127.0.0.1:9092:9092"
+    environment:
+      # Single-node KRaft broker (no ZooKeeper); values match the CI harness.
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+    healthcheck:
+      test: ["CMD", "/opt/kafka/bin/kafka-broker-api-versions.sh", "--bootstrap-server", "localhost:9092"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+
+  tiled:
+    image: ghcr.io/bluesky/tiled:latest
+    container_name: hexsim-tiled
+    # Ephemeral catalog (SQLite temp) — reset on restart; seed re-creates hex/raw.
+    command: ["tiled", "serve", "catalog", "--temp", "--host", "0.0.0.0", "--port", "8000", "--api-key", "secret"]
+    ports:
+      - "127.0.0.1:8000:8000"

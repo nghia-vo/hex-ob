@@ -1,8 +1,7 @@
 # hex-ob — HEX Ophyd-async + Bluesky for Dev
 
 Workspace for developing and testing **hextools** and **hex-profile-collection**
-against the simulated HEX beamline
-([`hxm_program/simulated_beamlines/HEX`](https://github.com/NSLS2/hxm_program/tree/main/simulated_beamlines/HEX))
+against the simulated HEX beamline (in-repo: [`hex-simulated-beamline/`](hex-simulated-beamline/))
 without touching the production repos (Nghia's setup, 2026-07-30). Break things
 freely here; merge back when green.
 
@@ -14,6 +13,7 @@ hex-ob/
   plans/                    # tracked — Bluesky plans (tomography/, ...)
   TUTORIAL.md               # tracked — scientist-facing how-to (Nghia)
   tests/                    # tracked — mock + sim verification scripts
+  hex-simulated-beamline/   # tracked — the simulated HEX beamline (canonical home)
   hextools/                 # full clone (own .git, all branches, GitHub remotes)
   hex-profile-collection/   # full clone (own .git, all branches, GitHub remotes)
   README.md                 # this file — sandbox-level docs live at this level
@@ -21,7 +21,12 @@ hex-ob/
 
 Since 2026-08-02 (Nghia), the **working code for the HXM-1288 port lives in the
 tracked top-level `lib/` + `plans/`** and is developed/PRed in this repo
-directly. The two package directories remain **independent nested git
+directly. **The simulated beamline moved here from
+`hxm_program/simulated_beamlines/HEX` (2026-08-07)** — hex-ob is now its
+canonical home, so a PR's own SHA carries both the code under test and the sim
+that validates it; machine-local state (`.toolenv/` helper venv, `.reflow2/`)
+is gitignored, and `hex-simulated-beamline/scripts/up_all.sh` bootstraps the
+venv on first run. The two package directories remain **independent nested git
 repositories**, deliberately ignored by hex-ob's own git (see `.gitignore`) —
 they hold parked branches and the profile/pixi environment used to run against
 the sim; promotion of `lib/`/`plans/` into `hextools` proper is deferred until

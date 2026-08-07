@@ -1,0 +1,54 @@
+# Simulated PandA for the HEX sim (real PVA/PVI, no mocking)
+#
+# Two containers give the HEX profile's `HDFPanda` a real PVA `:PVI` interface to
+# introspect \u2014 so PandA does NOT have to be mocked (route "b"):
+#   panda-sim : PandABlocks-server SIMULATION (built from source) \u2014 control :8888, data :8889
+#   panda-ioc : published pandablocks-ioc, serves EPICS CA + PVA for prefix XF:27ID1-ES{PANDA:1}
+#
+# Both use host networking so CA/PVA reach a bluesky session running on the host.
+# Run alongside the services stack:
+#   docker compose -f compose/docker-compose.yml -f compose/docker-compose.panda.yml up -d
+name: hexsim
+
+services:
+  panda-sim:
+    build:
+      context: ../iocs/panda
+      dockerfile: Dockerfile.simserver
+    image: hexsim-panda-sim:local
+    container_name: hexsim-panda-sim
+    network_mode: host
+    restart: unless-stopped
+
+  panda-ioc:
+    # Pinned to the version NSLS2 deploys (nsls2.ioc_deploy pandabox role).
+    image: ghcr.io/pandablocks/pandablocks-ioc:0.11.5
+    container_name: hexsim-panda-ioc
+    network_mode: host
+    # softioc drops into an interactive Python console; keep stdin open so it
+    # doesn't hit EOF and exit (which would trigger a restart loop).
+    stdin_open: true
+    tty: true
+    environment:
+      EPICS_CA_AUTO_ADDR_LIST: "NO"
+      EPICS_CA_ADDR_LIST: "127.0.0.1"
+      EPICS_PVA_AUTO_ADDR_LIST: "NO"
+      EPICS_PVA_ADDR_LIST: "127.0.0.1"
+      # Dedicated CA port + loopback-only binds: sim_ioc (caproto blackhole)
+      # owns :5064; two servers binding one UDP search port go deaf to
+      # unicast. Clients add 127.0.0.1:5095 (scripts/env.sh). PVA untouched.
+      EPICS_CAS_SERVER_PORT: "5095"
+      EPICS_CAS_INTF_ADDR_LIST: "127.0.0.1"
+    volumes:
+      # The PandABlocks-ioc writes REAL HDF files (unlike the faked Kinetix), so
+      # its HDF directory must exist + be writable inside the container. Share the
+      # sim data dir with the host (matches the profile's HEX_SIM StaticPathProvider
+      # default, HEX_SIM_DATA_DIR=/tmp/hex-sim-data). Create it before `up`.
+      - /tmp/hex-sim-data:/tmp/hex-sim-data
+      # Acquisition scripts point DATA:HDFDirectory at /nsls2/... paths; inside
+      # this container that is the SIM storage tree (see sync_sim_experiment.sh).
+      - /tmp/hex-sim-data/nsls2:/nsls2
+    command: ["softioc", "127.0.0.1", "XF:27ID1-ES{PANDA:1}"]
+    depends_on:
+      - panda-sim
+    restart: unless-stopped
