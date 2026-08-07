@@ -78,6 +78,28 @@ class SettablePathProvider:
         )
 
 
+def set_output_dir(detector, output_dir, filename: str = "proj") -> Path:
+    """
+    Point *detector*'s settable path provider at *output_dir*.
+
+    The shared front half of every plan that takes an ``output_dir``
+    argument (equivalent of the old ``camera.set_hdf_file_path(...)``).
+    Raises TypeError with guidance if the detector wasn't built by
+    make_kinetix (or doesn't otherwise carry a settable provider).
+    """
+    output_path = Path(output_dir)
+    path_provider = getattr(detector, "path_provider", None)
+    if path_provider is None or not hasattr(path_provider, "set"):
+        detector_label = getattr(detector, "name", type(detector).__name__)
+        raise TypeError(
+            f"{detector_label} has no settable path provider; build it with "
+            "lib.detectors.make_kinetix so the plan can direct its output "
+            "to output_dir."
+        )
+    path_provider.set(output_path, filename)
+    return output_path
+
+
 class HEXADHDFDataLogic(ADHDFDataLogic):
     """HDF data logic with the HEX workarounds: no SWMR, no flush-now, 60 s close."""
 
