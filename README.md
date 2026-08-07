@@ -10,10 +10,17 @@ freely here; merge back when green.
 
 ```
 hex-ob/
+  hex-simulated-beamline/   # tracked — the simulated HEX beamline (canonical home)
   hextools/                 # full clone (own .git, all branches, GitHub remotes)
   hex-profile-collection/   # full clone (own .git, all branches, GitHub remotes)
   README.md                 # this file — sandbox-level docs live at this level
 ```
+
+**The simulated beamline moved here from `hxm_program/simulated_beamlines/HEX`
+(2026-08-07)** — hex-ob is now its canonical home, so a PR's own SHA carries
+both the code under test and the sim that validates it. Machine-local state
+(`.toolenv/` helper venv, `.reflow2/`) is gitignored; recreate the venv via
+`hex-simulated-beamline/scripts/up_all.sh` (it bootstraps on first run).
 
 The two package directories are **independent nested git repositories**,
 deliberately ignored by hex-ob's own git (see `.gitignore`). hex-ob tracks only
