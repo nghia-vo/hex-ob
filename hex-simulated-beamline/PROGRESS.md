@@ -373,22 +373,25 @@ rotation restored. Runner: hex-ob `tests/alignment_scan_sim_test.py`
   as hex-ob scripts demand them (same route as FakeMotor). Goal: the sim
   evolves in lock-step with hex-ob / hextools / hex-profile-collection.
 
-## 🚧 Remaining / next
+### 13. Armed-external gating — the fly path runs green vs the sim (✅ 2026-08-07)
+`iocs/panda/armed_gate_bridge.py` (OPT-IN, like ttl_trigger_bridge — the
+oracle must run WITHOUT it) makes armed-external behave like a real Kinetix:
+on TriggerMode→external it disables the Trans1 callbacks (plugin-chain
+gate) and, when ophyd-async arms the camera during prepare, immediately
+stops it (callback-driven hold); when the PULSE1 train really fires
+(COUNTER3 tally increments — NB the tally RESETS to 0 at PCAP arm, the
+bridge rebaselines) it restarts the camera, which then runs its full armed
+NumImages — count exact by construction. With it,
+`tests/tomo_flyscan_sim_test.py` (hex-ob) passes end-to-end: plain fly (61
+frames, PandA Angle 0.000→29.000°) AND averaged fly (30 averaged frames,
+60 raw-pulse angles). Chasing it also produced a real PLAN fix: an
+encoder-settle wait before reading the start encoder / arming (the sim's
+slew-limited INENC bridge made stale reads obvious; a lagging real encoder
+would too). Known residue for the BEAMLINE BATCH: consecutive fly scans in
+one session showed a one-frame plugin-state interplay (sim tests isolate
+per phase); watch run_multiple_scans on real hardware for the same.
 
-0. **Armed-external frame gating (found 2026-08-07 porting `tomo_flyscan`):**
-   the frame tier free-runs when armed, so an ophyd-async EXTERNAL_EDGE fly
-   scan fails kickoff ("Kickoff requested N:M...") — frames leak into the
-   capture before kickoff. The pyepics oracle tolerates this (its model IS
-   free-run + separate PandA tally); the Bluesky fly path needs the sim
-   camera to hold frames until PULSE1 fires when TriggerMode is external.
-   Direction: extend the personality/bridge so armed-external pacing is
-   driven by the pulse train (per-pulse), not the sim driver's own clock.
-   Until then `tests/tomo_flyscan_sim_test.py` (hex-ob) exits with a KNOWN
-   SIM GAP message; the plan itself mirrors the beamline-proven profile
-   structure. Two REAL device-layer fixes came out of the chase (both apply
-   at the beamline too): wait for NumCaptured reset to propagate before
-   ophyd-async's baseline read, and stop the live view at stage() (the old
-   scripts' stop_preview).
+## 🚧 Remaining / next
 
 1. **The "after" leg**: hextools `tomo_fly` via the tutorial (M0→M6), then
    the functional-equivalence comparison against oracle outputs

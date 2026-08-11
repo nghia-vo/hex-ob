@@ -58,6 +58,8 @@ DETECTOR_MAX_FRAMERATES = {
 TOMO_ROTARY_STAGE_VELO_RESET_MAX = 30  # deg/s, non-scan moves
 TOMO_ROTARY_STAGE_VELO_SCAN_MAX = 60   # deg/s, during the sweep
 OVERHEAD = 0.005                       # s, minimum frame-period overhead
+ENCODER_SETTLE_TOL = 20                # counts between reads == stationary
+ENCODER_SETTLE_TIMEOUT = 30.0          # s
 
 
 def tomo_flyscan(
@@ -246,11 +248,31 @@ def tomo_flyscan(
             deadtime=0.0001,
         )
 
+        def _wait_encoder_settled(label):
+            # The PandA must see the stage AT its commanded position: a
+            # lagging encoder (or the sim's slew-limited motor->INENC
+            # bridge after big repositioning moves) yields stale reads —
+            # a stale start_encoder mis-programs PCOMP.START, and arming
+            # with the apparent position past START fires immediately.
+            # Calibration-free: settled == two reads 0.2 s apart agree.
+            last = yield from bps.rd(panda.calc[2].out)
+            for _ in range(int(ENCODER_SETTLE_TIMEOUT / 0.2)):
+                yield from bps.sleep(0.2)
+                now = yield from bps.rd(panda.calc[2].out)
+                if abs(now - last) < ENCODER_SETTLE_TOL:
+                    return now
+                last = now
+            raise RuntimeError(
+                f"Encoder still moving at the {label} position "
+                f"(last read {last:.0f} counts)"
+            )
+
         # -- position the stage and read the start-angle encoder count ----
         yield from bps.mv(rot_stage.velocity, reset_speed)
         yield from bps.mv(rot_stage, start_deg)
-        start_encoder = yield from bps.rd(panda.calc[2].out)
+        start_encoder = yield from _wait_encoder_settled("start")
         yield from bps.mv(rot_stage, start_deg - lead_angle)
+        yield from _wait_encoder_settled("lead")
         yield from bps.mv(rot_stage.velocity, rot_motor_vel)
 
         # -- PandA block configuration ------------------------------------

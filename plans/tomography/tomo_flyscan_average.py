@@ -123,6 +123,11 @@ def tomo_flyscan_average(
     saved_ports: dict = {}
 
     def _body():
+        # Stop the live view BEFORE re-routing (the legacy stop_preview):
+        # otherwise streaming arrays sit in the plugin queues mid-rewire and
+        # leak into the new capture as phantom pre-kickoff frames.
+        for det in detectors:
+            yield from bps.abs_set(det.driver.acquire, 0, wait=True)
         for det in detectors:
             saved_ports[det.name] = yield from configure_averaging(
                 det, frames_to_average
@@ -139,5 +144,14 @@ def tomo_flyscan_average(
         for det in detectors:
             if det.name in saved_ports:
                 yield from restore_averaging(det, saved_ports[det.name])
+        # After a completed scan the detector's unstage has already
+        # restarted the live view; but a failure BEFORE staging (e.g. in
+        # configure_averaging) leaves the camera stopped by _body's
+        # stop-preview. Restart any camera found stopped so the session
+        # stays usable without manual intervention.
+        for det in detectors:
+            acquiring = yield from bps.rd(det.driver.acquire)
+            if not acquiring:
+                yield from bps.wait_for([det.start_live_view])
 
     return (yield from bpp.finalize_wrapper(_body(), _cleanup()))
