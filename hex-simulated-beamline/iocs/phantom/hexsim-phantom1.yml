@@ -1,0 +1,22 @@
+# Sim deployment config for the REAL ADPhantom IOC (nsls2.ioc_deploy
+# adphantom role), mirroring the live phantom-det1.yml from xf27id1-det1
+# with exactly one change: CAMERA_IP points at the loopback sim_camera.
+#
+# Build path (kinetix pattern — see README.md): run the adphantom role in
+# the nsls2_ioc_deploy_el8 container against this config, then
+# `docker commit` the container as hexsim-phantom-ioc:local.
+#
+# CA binds LOOPBACK ONLY on a dedicated port :5105 (kinetix :5085,
+# panda-ioc :5095, motor :5075 — a second server on a shared port goes
+# deaf to unicast searches).  Real HEX prefix, sim-only reachability.
+
+phantom-sim1:
+    type: adphantom
+    environment:
+        PREFIX: "XF:27ID1-ES{Phantom-Det:1}"
+        ENGINEER: "hex-ob simulated beamline (deployed config: J. Wlodek)"
+        CAMERA_IP: 127.0.0.1
+        # CTRL_PORT/DATA_PORT default to 7115/7116 (sim_camera's defaults).
+        MAC_ADDR: "020000000000"   # dummy (locally administered) — the sim never reads it; the real value stays in the beamline's live config
+        INTF: lo
+        NUM_CINES: 63

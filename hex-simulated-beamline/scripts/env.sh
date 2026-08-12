@@ -7,8 +7,9 @@
 # the dedicated motor IOC on :5075. List both so clients search both.
 export EPICS_CA_AUTO_ADDR_LIST=NO
 # :5064 sim_ioc (typed sims + blackhole) · :5075 motor IOC ·
-# :5085 Kinetix AD IOC (frame tier) · :5095 panda-ioc CA
-export EPICS_CA_ADDR_LIST="127.0.0.1:5064 127.0.0.1:5075 127.0.0.1:5085 127.0.0.1:5095"
+# :5085 Kinetix AD IOC (frame tier) · :5095 panda-ioc CA ·
+# :5105 Phantom AD IOC (real ADPhantom vs sim_camera)
+export EPICS_CA_ADDR_LIST="127.0.0.1:5064 127.0.0.1:5075 127.0.0.1:5085 127.0.0.1:5095 127.0.0.1:5105"
 
 # Resolve this script's dir so the secret/cert paths are absolute.
 _HEXSIM_HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

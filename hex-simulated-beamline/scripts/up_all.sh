@@ -29,7 +29,15 @@ fi
 PY="$TOOLENV/bin/python"
 
 # ---- 0. data dir + services + experiment identity ---------------------------
-mkdir -p /tmp/hex-sim-data && chmod 777 /tmp/hex-sim-data
+# If docker recreated the dir root-owned (daemon restart before up), chmod
+# by non-owner fails even when the mode is already right — writable is what
+# matters.
+mkdir -p /tmp/hex-sim-data
+chmod 777 /tmp/hex-sim-data 2>/dev/null || [ -w /tmp/hex-sim-data ] || {
+    echo "[up_all] ERROR: /tmp/hex-sim-data not writable (root-owned?); fix:"
+    echo "         docker exec -u 0 hexsim-phantom-ioc chmod -R 777 /tmp/hex-sim-data"
+    exit 1
+}
 say "services (Redis/Mongo/Kafka/Tiled) + sim sync-experiment..."
 "$here/up.sh" >/dev/null
 say "  services OK"
@@ -68,6 +76,29 @@ for i in $(seq 60); do
 done
 say "  kinetix AD IOC OK"
 
+# ---- 2b. Phantom tier (sim camera + real ADPhantom IOC, CA :5105) ------------
+# START ORDER MATTERS: the driver opens its CTRL/DATA sockets at iocInit, so
+# sim_camera must be listening on 7115/7116 BEFORE the IOC container boots.
+if ! pgrep -f "iocs/phantom/sim_camera.py" >/dev/null; then
+    say "starting phantom sim camera (CTRL :7115 / DATA :7116)..."
+    nohup "$PY" -u "$root/iocs/phantom/sim_camera.py" \
+        > /tmp/hex-phantom-cam.log 2>&1 &
+    sleep 2
+fi
+if ! docker image inspect hexsim-phantom-ioc:local >/dev/null 2>&1; then
+    say "ERROR: image hexsim-phantom-ioc:local missing — build it once via the"
+    say "       nsls2.ioc_deploy steps in iocs/phantom/README.md (Phantom tier)."
+    exit 1
+fi
+say "phantom AD IOC..."
+COMPOSE_IGNORE_ORPHANS=1 docker compose -f "$root/compose/docker-compose.phantom.yml" up -d 2>/dev/null
+for i in $(seq 60); do
+    docker logs hexsim-phantom-ioc 2>&1 | grep -q "completed startup" && break
+    [ "$i" = 60 ] && { say "ERROR: phantom IOC never finished startup (docker logs hexsim-phantom-ioc)"; exit 1; }
+    sleep 2
+done
+say "  phantom AD IOC OK"
+
 # ---- 3. motor IOC (:5075) ----------------------------------------------------
 if ! ss -uln | grep -q "127.0.0.1:5075 "; then
     say "starting motor IOC..."
@@ -97,7 +128,7 @@ say "  bridge OK"
 if ! pgrep -f "sim_ioc.py" >/dev/null; then
     if [ -f "$PROFILE_MANIFEST" ]; then
         say "starting sim_ioc (pixi env: $PROFILE_MANIFEST)..."
-        BLACKHOLE_EXCLUDE_PREFIXES="XF:27ID1-BI{Kinetix-Det:1} XF:27ID1-ES{PANDA:1} XF:27IDF-OP:1{MC:5-" \
+        BLACKHOLE_EXCLUDE_PREFIXES="XF:27ID1-BI{Kinetix-Det:1} XF:27ID1-ES{PANDA:1} XF:27IDF-OP:1{MC:5- XF:27ID1-ES{Phantom-Det:1}" \
             nohup pixi run --manifest-path "$PROFILE_MANIFEST" -e terminal \
             python "$root/iocs/sim_ioc.py" --kinetix-ids 3 \
             > /tmp/hex-simioc.log 2>&1 &

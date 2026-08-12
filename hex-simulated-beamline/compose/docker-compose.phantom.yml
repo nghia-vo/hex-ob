@@ -1,0 +1,40 @@
+# Simulated HEX Phantom — real ADPhantom IOC against the fake camera
+# (sim_camera.py on loopback 7115/7116). See ../iocs/phantom/README.md.
+#
+# The image is a snapshot of the deploy container after the adphantom role
+# ran against ../iocs/phantom/hexsim-phantom1.yml:
+#   docker commit nsls2_ioc_deploy_el8 hexsim-phantom-ioc:local
+#
+# START ORDER: sim_camera must be listening BEFORE the IOC boots — the
+# driver opens its CTRL/DATA sockets at iocInit. up_all.sh handles this.
+#
+# CA on a DEDICATED port :5105 (kinetix :5085, panda-ioc :5095, motor
+# :5075 — a second server on a shared port goes deaf to unicast searches),
+# LOOPBACK-ONLY binds (beamline-safety guardrail). Clients add
+# 127.0.0.1:5105 to EPICS_CA_ADDR_LIST (scripts/env.sh).
+
+name: hexsim
+
+services:
+  phantom-ioc:
+    image: hexsim-phantom-ioc:local
+    container_name: hexsim-phantom-ioc
+    network_mode: host
+    # iocsh needs a terminal; keep stdin open so it doesn't EOF-exit.
+    stdin_open: true
+    tty: true
+    working_dir: /epics/iocs/phantom-sim1/iocBoot
+    command: ["./st.cmd"]
+    environment:
+      EPICS_CAS_INTF_ADDR_LIST: "127.0.0.1"
+      EPICS_CAS_SERVER_PORT: "5105"
+      EPICS_CA_SERVER_PORT: "5105"
+      EPICS_CA_AUTO_ADDR_LIST: "NO"
+      EPICS_CA_ADDR_LIST: "127.0.0.1"
+    volumes:
+      # Detector HDF output shared with the host (kinetix convention).
+      - /tmp/hex-sim-data:/tmp/hex-sim-data
+      # Scripts write under /nsls2/... — inside the container that path is
+      # the SIM storage tree (sentinel pass-000000); see kinetix compose.
+      - /tmp/hex-sim-data/nsls2:/nsls2
+    restart: unless-stopped
