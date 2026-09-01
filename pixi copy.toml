@@ -12,9 +12,14 @@ channels = ["conda-forge"]
 platforms = ["linux-64"]
 
 [dependencies]
-bluesky = ">=1.15.1,<2"
-ophyd-async = ">=0.21.2,<0.22"
+python = "3.12.*"
+pip = "*"
 
+[pypi-dependencies]
+ophyd-async = { version = ">=0.19.3,<0.20", extras = ["ca", "pva"] }
+bluesky = "*"
+numpy = "*"
+pytest = "*"
 
 [tasks]
 test-mock = "python tests/run_mock_tests.py"
